@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Admin — Duo Parfum</title>
+  <link rel="stylesheet" href="./style.css" />
+  <!-- Firebase -->
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore-compat.js"></script>
+  <script defer>
+    const firebaseConfig = {
+  apiKey: "AIzaSyDVkpsr4z6LolEOkNTGcc9TmKeiu4-mi1Y",
+  authDomain: "duoparfum-61ec2.firebaseapp.com",
+  projectId: "duoparfum-61ec2",
+  storageBucket: "duoparfum-61ec2.firebasestorage.app",
+  messagingSenderId: "889684986920",
+  appId: "1:889684986920:web:9d452daf2192124b19391d"
+};
+    const ADMIN_EMAILS = ["guilherme.piccini@hotmail.com"];
+    let app, db, auth;
+
+    document.addEventListener("DOMContentLoaded", async ()=>{
+      app = firebase.initializeApp(firebaseConfig);
+      auth = firebase.auth();
+      db = firebase.firestore();
+
+      const out = id => document.getElementById(id);
+
+      auth.onAuthStateChanged(async (user)=>{
+        if(!user){ window.location.href = "./"; return; }
+        if(!ADMIN_EMAILS.includes(user.email)){ alert("Acesso negado."); window.location.href="./"; }
+        loadList();
+      });
+
+      document.getElementById("btnLogin").onclick = async ()=>{
+        const provider = new firebase.auth.GoogleAuthProvider();
+        await auth.signInWithPopup(provider);
+      }
+      document.getElementById("btnLogout").onclick = ()=> auth.signOut();
+
+      document.getElementById("form").addEventListener("submit", async (e)=>{
+        e.preventDefault();
+        const data = {
+          name: out("name").value.trim(),
+          brand: out("brand").value.trim(),
+          price: parseFloat(out("price").value || "0"),
+          ml: out("ml").value.trim(),
+          notes: out("notes").value.trim(),
+          category: out("category").value,
+          image: out("image").value.trim(),
+          featured: out("featured").checked,
+          stock: parseInt(out("stock").value || "0",10),
+          createdAt: new Date()
+        };
+        if(!data.name || !data.price){ alert("Nome e preço são obrigatórios."); return; }
+        await db.collection("products").add(data);
+        e.target.reset();
+        loadList();
+        alert("Produto cadastrado!");
+      });
+
+      async function loadList(){
+        const box = document.getElementById("list");
+        box.innerHTML = "<p class='muted'>Carregando...</p>";
+        const snap = await db.collection("products").orderBy("createdAt","desc").get();
+        box.innerHTML = "";
+        snap.forEach(doc=>{
+          const d = doc.data();
+          const row = document.createElement("div");
+          row.className="card";
+          row.innerHTML = `
+            <div class="pad">
+              <strong>${d.name}</strong> — ${d.brand||""} — R$ ${d.price?.toFixed(2)}
+              <div class="muted">${d.category||""} • ${d.ml||""} • estoque: ${d.stock??0}</div>
+              <div class="row gap" style="margin-top:10px">
+                <button class="btn ghost" data-id="${doc.id}" data-act="del">Excluir</button>
+              </div>
+            </div>
+          `;
+          row.querySelector("[data-act='del']").onclick = async ()=>{
+            if(confirm("Excluir este produto?")){ await db.collection("products").doc(doc.id).delete(); loadList(); }
+          }
+          box.appendChild(row);
+        });
+      }
+    });
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="container row between center">
+      <a class="brand-wrap" href="./">
+        <img class="brand-logo" src="./assets/logo.jpg" alt="Duo Parfum logo"/>
+        <span class="brand-name">Duo Parfum</span>
+      </a>
+      <div class="row">
+        <button id="btnLogin" class="btn ghost">Entrar</button>
+        <button id="btnLogout" class="btn ghost">Sair</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container" style="padding:20px 0">
+    <h2>Adicionar produto</h2>
+    <form id="form" class="card" style="padding:16px;gap:10px">
+      <div class="row wrap">
+        <input id="name" required placeholder="Nome" style="flex:2;min-width:220px;padding:10px;border:1px solid var(--border);border-radius:10px">
+        <input id="brand" placeholder="Marca" style="flex:1;min-width:160px;padding:10px;border:1px solid var(--border);border-radius:10px">
+        <input id="price" required type="number" step="0.01" placeholder="Preço (R$)" style="width:160px;padding:10px;border:1px solid var(--border);border-radius:10px">
+        <input id="ml" placeholder="Volume (ex: 10 ml)" style="width:160px;padding:10px;border:1px solid var(--border);border-radius:10px">
+        <select id="category" style="width:180px;padding:10px;border:1px solid var(--border);border-radius:10px">
+          <option>Decant</option><option>Importado</option><option>Nacional</option><option>Tester</option>
+        </select>
+        <input id="image" placeholder="URL da imagem" style="flex:2;min-width:220px;padding:10px;border:1px solid var(--border);border-radius:10px">
+        <input id="stock" type="number" placeholder="Estoque" style="width:120px;padding:10px;border:1px solid var(--border);border-radius:10px">
+      </div>
+      <textarea id="notes" rows="3" placeholder="Notas/descrição" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:10px"></textarea>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input id="featured" type="checkbox"> Destacar no catálogo
+      </label>
+      <button class="btn">Salvar produto</button>
+    </form>
+
+    <h2 style="margin-top:24px">Produtos</h2>
+    <div id="list" class="grid"></div>
+  </main>
+</body>
+</html>
