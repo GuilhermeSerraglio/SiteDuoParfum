@@ -7,7 +7,7 @@ const firebaseConfig = {
   messagingSenderId: "889684986920",
   appId: "1:889684986920:web:9d452daf2192124b19391d"
 };
-const ADMIN_EMAILS = ["guilherme.serraglio03@gmail.com"];
+const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
 const WHATSAPP_PHONE = "5566992254072";
 /* ============================================ */
 
