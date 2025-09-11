@@ -112,7 +112,12 @@
               <div class="row between wrap">
                 <div>
                   <strong>${escapeHtml(d.name)}</strong> — ${escapeHtml(d.brand||"")} — R$ ${Number(d.price||0).toFixed(2)}
-                  <div class="muted">${escapeHtml(d.category||"")} • ${escapeHtml(d.ml||"")} • estoque: ${d.stock??0}</div>
+                  <div class="muted">${escapeHtml(d.category||"")} • ${escapeHtml(d.ml||"")}</div>
+                  <div class="row gap" style="margin-top:6px;align-items:center">
+                    <button class="qtyBtn" data-act="dec">-</button>
+                    <span>Estoque: <strong>${d.stock??0}</strong></span>
+                    <button class="qtyBtn" data-act="inc">+</button>
+                  </div>
                 </div>
                 <img src="${sanitizeImg(d.image)}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--border)" alt="">
               </div>
@@ -128,6 +133,17 @@
               await db.collection("products").doc(doc.id).delete();
               loadList();
             }
+          };
+          // Controle de estoque
+          row.querySelector('[data-act="inc"]').onclick = async ()=>{
+            const newStock = (d.stock??0)+1;
+            await db.collection("products").doc(doc.id).update({stock:newStock});
+            loadList();
+          };
+          row.querySelector('[data-act="dec"]').onclick = async ()=>{
+            const newStock = Math.max((d.stock??0)-1,0);
+            await db.collection("products").doc(doc.id).update({stock:newStock});
+            loadList();
           };
           box.appendChild(row);
         });
@@ -173,6 +189,9 @@
       function escapeHtml(s=""){ return s.replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
     });
   </script>
+  <style>
+    .qtyBtn{width:28px;height:28px;border:1px solid var(--border);background:var(--surface);border-radius:8px;cursor:pointer;font-weight:bold;}
+  </style>
 </head>
 <body>
   <header class="topbar">
