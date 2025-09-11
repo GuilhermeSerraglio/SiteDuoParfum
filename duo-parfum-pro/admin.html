@@ -9,82 +9,168 @@
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-storage-compat.js"></script>
   <script defer>
     const firebaseConfig = {
-  apiKey: "AIzaSyDVkpsr4z6LolEOkNTGcc9TmKeiu4-mi1Y",
-  authDomain: "duoparfum-61ec2.firebaseapp.com",
-  projectId: "duoparfum-61ec2",
-  storageBucket: "duoparfum-61ec2.firebasestorage.app",
-  messagingSenderId: "889684986920",
-  appId: "1:889684986920:web:9d452daf2192124b19391d"
-};
-    const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
-    let app, db, auth;
+      apiKey: "AIzaSyDVkpsr4z6LolEOkNTGcc9TmKeiu4-mi1Y",
+      authDomain: "duoparfum-61ec2.firebaseapp.com",
+      projectId: "duoparfum-61ec2",
+      storageBucket: "duoparfum-61ec2.firebasestorage.app",
+      messagingSenderId: "889684986920",
+      appId: "1:889684986920:web:9d452daf2192124b19391d"
+    };
+    const ADMIN_EMAILS = ["guilherme.piccini@hotmail.com"];
+
+    let app, db, auth, storage;
+    let editingId = null;
 
     document.addEventListener("DOMContentLoaded", async ()=>{
       app = firebase.initializeApp(firebaseConfig);
       auth = firebase.auth();
       db = firebase.firestore();
+      storage = firebase.storage();
 
-      const out = id => document.getElementById(id);
+      const $ = id => document.getElementById(id);
 
       auth.onAuthStateChanged(async (user)=>{
         if(!user){ window.location.href = "./"; return; }
-        if(!ADMIN_EMAILS.includes(user.email)){ alert("Acesso negado."); window.location.href="./"; }
+        if(!ADMIN_EMAILS.includes(user.email)){
+          alert("Acesso negado.");
+          window.location.href="./";
+          return;
+        }
         loadList();
       });
 
-      document.getElementById("btnLogin").onclick = async ()=>{
+      $("btnLogin").onclick = async ()=>{
         const provider = new firebase.auth.GoogleAuthProvider();
         await auth.signInWithPopup(provider);
-      }
-      document.getElementById("btnLogout").onclick = ()=> auth.signOut();
+      };
+      $("btnLogout").onclick = ()=> auth.signOut();
 
-      document.getElementById("form").addEventListener("submit", async (e)=>{
+      $("btnCancel").onclick = ()=>{
+        editingId = null;
+        $("form").reset();
+        $("submitLabel").textContent = "Salvar produto";
+      };
+
+      $("form").addEventListener("submit", async (e)=>{
         e.preventDefault();
-        const data = {
-          name: out("name").value.trim(),
-          brand: out("brand").value.trim(),
-          price: parseFloat(out("price").value || "0"),
-          ml: out("ml").value.trim(),
-          notes: out("notes").value.trim(),
-          category: out("category").value,
-          image: out("image").value.trim(),
-          featured: out("featured").checked,
-          stock: parseInt(out("stock").value || "0",10),
-          createdAt: new Date()
-        };
-        if(!data.name || !data.price){ alert("Nome e preço são obrigatórios."); return; }
-        await db.collection("products").add(data);
-        e.target.reset();
-        loadList();
-        alert("Produto cadastrado!");
+        const data = collectFormData();
+        if(!data.name || !data.price){
+          alert("Nome e preço são obrigatórios.");
+          return;
+        }
+
+        const file = $("imageFile").files[0];
+        try{
+          $("submit").disabled = true;
+          $("submitLabel").textContent = editingId ? "Atualizando…" : "Salvando…";
+
+          if(editingId){
+            if(file){
+              data.image = await uploadImage(file, editingId);
+            }
+            data.updatedAt = new Date();
+            await db.collection("products").doc(editingId).update(data);
+            alert("Produto atualizado!");
+          }else{
+            const ref = await db.collection("products").add({
+              ...data,
+              createdAt: new Date()
+            });
+            if(file){
+              const url = await uploadImage(file, ref.id);
+              await ref.update({ image: url });
+            }
+            alert("Produto cadastrado!");
+          }
+
+          e.target.reset();
+          editingId = null;
+          $("submitLabel").textContent = "Salvar produto";
+          loadList();
+        }catch(err){
+          console.error(err);
+          alert("Erro: " + (err.message||err));
+        }finally{
+          $("submit").disabled = false;
+        }
       });
 
       async function loadList(){
-        const box = document.getElementById("list");
-        box.innerHTML = "<p class='muted'>Carregando...</p>";
+        const box = $("list");
+        box.innerHTML = "<p class='muted'>Carregando…</p>";
         const snap = await db.collection("products").orderBy("createdAt","desc").get();
         box.innerHTML = "";
         snap.forEach(doc=>{
           const d = doc.data();
           const row = document.createElement("div");
-          row.className="card";
+          row.className = "card";
           row.innerHTML = `
             <div class="pad">
-              <strong>${d.name}</strong> — ${d.brand||""} — R$ ${d.price?.toFixed(2)}
-              <div class="muted">${d.category||""} • ${d.ml||""} • estoque: ${d.stock??0}</div>
+              <div class="row between wrap">
+                <div>
+                  <strong>${escapeHtml(d.name)}</strong> — ${escapeHtml(d.brand||"")} — R$ ${Number(d.price||0).toFixed(2)}
+                  <div class="muted">${escapeHtml(d.category||"")} • ${escapeHtml(d.ml||"")} • estoque: ${d.stock??0}</div>
+                </div>
+                <img src="${sanitizeImg(d.image)}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--border)" alt="">
+              </div>
               <div class="row gap" style="margin-top:10px">
-                <button class="btn ghost" data-id="${doc.id}" data-act="del">Excluir</button>
+                <button class="btn ghost" data-act="edit">Editar</button>
+                <button class="btn ghost" data-act="del">Excluir</button>
               </div>
             </div>
           `;
-          row.querySelector("[data-act='del']").onclick = async ()=>{
-            if(confirm("Excluir este produto?")){ await db.collection("products").doc(doc.id).delete(); loadList(); }
-          }
+          row.querySelector('[data-act="edit"]').onclick = ()=> startEdit(doc.id, d);
+          row.querySelector('[data-act="del"]').onclick = async ()=>{
+            if(confirm("Excluir este produto?")){
+              await db.collection("products").doc(doc.id).delete();
+              loadList();
+            }
+          };
           box.appendChild(row);
         });
       }
+
+      function startEdit(id, d){
+        editingId = id;
+        $("name").value = d.name||"";
+        $("brand").value = d.brand||"";
+        $("price").value = d.price||"";
+        $("ml").value = d.ml||"";
+        $("category").value = d.category||"Decant";
+        $("image").value = d.image||"";
+        $("stock").value = d.stock??0;
+        $("notes").value = d.notes||"";
+        $("featured").checked = !!d.featured;
+        $("submitLabel").textContent = "Atualizar produto";
+        window.scrollTo({top:0,behavior:'smooth'});
+      }
+
+      function collectFormData(){
+        return {
+          name: $("name").value.trim(),
+          brand: $("brand").value.trim(),
+          price: parseFloat($("price").value||"0"),
+          ml: $("ml").value.trim(),
+          notes: $("notes").value.trim(),
+          category: $("category").value,
+          image: $("image").value.trim(),
+          featured: $("featured").checked,
+          stock: parseInt($("stock").value||"0",10)
+        };
+      }
+
+      async function uploadImage(file, id){
+        const safeName = (file.name||"img").replace(/[^a-z0-9_.-]/gi,'_').toLowerCase();
+        const ref = storage.ref().child(`products/${id}/${Date.now()}_${safeName}`);
+        const snap = await ref.put(file);
+        return await snap.ref.getDownloadURL();
+      }
+
+      function sanitizeImg(src){ return src || "https://picsum.photos/seed/duoparfum/300/300"; }
+      function escapeHtml(s=""){ return s.replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
     });
   </script>
 </head>
@@ -103,7 +189,7 @@
   </header>
 
   <main class="container" style="padding:20px 0">
-    <h2>Adicionar produto</h2>
+    <h2>Adicionar / editar produto</h2>
     <form id="form" class="card" style="padding:16px;gap:10px">
       <div class="row wrap">
         <input id="name" required placeholder="Nome" style="flex:2;min-width:220px;padding:10px;border:1px solid var(--border);border-radius:10px">
@@ -113,14 +199,18 @@
         <select id="category" style="width:180px;padding:10px;border:1px solid var(--border);border-radius:10px">
           <option>Decant</option><option>Importado</option><option>Nacional</option><option>Tester</option>
         </select>
-        <input id="image" placeholder="URL da imagem" style="flex:2;min-width:220px;padding:10px;border:1px solid var(--border);border-radius:10px">
+        <input id="image" placeholder="URL da imagem (opcional)" style="flex:2;min-width:220px;padding:10px;border:1px solid var(--border);border-radius:10px">
+        <input id="imageFile" type="file" accept="image/*" style="min-width:220px;padding:10px;border:1px solid var(--border);border-radius:10px">
         <input id="stock" type="number" placeholder="Estoque" style="width:120px;padding:10px;border:1px solid var(--border);border-radius:10px">
       </div>
       <textarea id="notes" rows="3" placeholder="Notas/descrição" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:10px"></textarea>
       <label style="display:flex;align-items:center;gap:8px">
         <input id="featured" type="checkbox"> Destacar no catálogo
       </label>
-      <button class="btn">Salvar produto</button>
+      <div class="row gap">
+        <button id="submit" class="btn" type="submit"><span id="submitLabel">Salvar produto</span></button>
+        <button id="btnCancel" class="btn ghost" type="button">Cancelar edição</button>
+      </div>
     </form>
 
     <h2 style="margin-top:24px">Produtos</h2>
