@@ -11,9 +11,6 @@
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore-compat.js"></script>
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-storage-compat.js"></script>
-
-  <!-- App -->
-  <script defer src="./app.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -29,7 +26,7 @@
     <!-- Produtos -->
     <section>
       <h3>Produtos</h3>
-      <form id="formProduct" class="row wrap gap" style="margin-bottom:14px">
+      <form id="productForm" class="row wrap gap" style="margin-bottom:14px">
         <input id="pName" class="input" placeholder="Nome" required>
         <input id="pBrand" class="input" placeholder="Marca">
         <input id="pMl" class="input" placeholder="ML">
@@ -39,7 +36,7 @@
         <input id="pImage" type="file" accept="image/*" class="input">
         <button class="btn">Salvar produto</button>
       </form>
-      <div id="listProducts" class="grid"></div>
+      <div id="productList" class="grid"></div>
     </section>
 
     <hr style="margin:30px 0">
@@ -47,18 +44,20 @@
     <!-- Pedidos -->
     <section>
       <h3>Pedidos</h3>
-      <div id="listOrders" class="grid"></div>
+      <div id="orderList" class="grid"></div>
     </section>
   </main>
 
   <script>
+    const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
+
     document.addEventListener("DOMContentLoaded", () => {
-      const user = firebase.auth().currentUser;
+      const auth = firebase.auth();
       const db = firebase.firestore();
       const storage = firebase.storage();
 
       const els = {
-        form: document.getElementById("formProduct"),
+        form: document.getElementById("productForm"),
         pName: document.getElementById("pName"),
         pBrand: document.getElementById("pBrand"),
         pMl: document.getElementById("pMl"),
@@ -66,13 +65,21 @@
         pNotes: document.getElementById("pNotes"),
         pCategory: document.getElementById("pCategory"),
         pImage: document.getElementById("pImage"),
-        listProducts: document.getElementById("listProducts"),
-        listOrders: document.getElementById("listOrders"),
+        productList: document.getElementById("productList"),
+        orderList: document.getElementById("orderList"),
         btnLogout: document.getElementById("btnLogout")
       };
 
+      /* ==== Proteção de acesso ==== */
+      auth.onAuthStateChanged(user => {
+        if (!user || !ADMIN_EMAILS.includes(user.email)) {
+          alert("Acesso negado. Somente administradores.");
+          window.location.href = "/";
+        }
+      });
+
       /* ==== Logout ==== */
-      els.btnLogout.onclick = () => firebase.auth().signOut();
+      els.btnLogout.onclick = () => auth.signOut();
 
       /* ==== Produtos ==== */
       els.form.onsubmit = async (e) => {
@@ -80,32 +87,37 @@
         const file = els.pImage.files[0];
         let url = "";
 
-        if (file) {
-          const ref = storage.ref("products/" + Date.now() + "-" + file.name);
-          await ref.put(file);
-          url = await ref.getDownloadURL();
+        try {
+          if (file) {
+            const ref = storage.ref("products/" + Date.now() + "-" + file.name);
+            await ref.put(file);
+            url = await ref.getDownloadURL();
+          }
+
+          await db.collection("products").add({
+            name: els.pName.value,
+            brand: els.pBrand.value,
+            ml: els.pMl.value,
+            price: parseFloat(els.pPrice.value),
+            notes: els.pNotes.value,
+            category: els.pCategory.value,
+            image: url,
+            stock: 0,
+            featured: false,
+            createdAt: new Date()
+          });
+
+          els.form.reset();
+          loadProducts();
+        } catch (err) {
+          console.error("Erro ao salvar produto:", err);
+          alert("Erro ao salvar produto.");
         }
-
-        await db.collection("products").add({
-          name: els.pName.value,
-          brand: els.pBrand.value,
-          ml: els.pMl.value,
-          price: parseFloat(els.pPrice.value),
-          notes: els.pNotes.value,
-          category: els.pCategory.value,
-          image: url,
-          stock: 0,
-          featured: false,
-          createdAt: new Date()
-        });
-
-        els.form.reset();
-        loadProducts();
       };
 
       async function loadProducts() {
         const snap = await db.collection("products").orderBy("createdAt","desc").get();
-        els.listProducts.innerHTML = "";
+        els.productList.innerHTML = "";
         snap.forEach(doc => {
           const d = doc.data();
           const card = document.createElement("div");
@@ -123,7 +135,7 @@
                 <button class="btn small" onclick="deleteProduct('${doc.id}')">Excluir</button>
               </div>
             </div>`;
-          els.listProducts.appendChild(card);
+          els.productList.appendChild(card);
         });
       }
 
@@ -148,7 +160,7 @@
       /* ==== Pedidos ==== */
       async function loadOrders() {
         const snap = await db.collection("orders").orderBy("createdAt","desc").get();
-        els.listOrders.innerHTML = "";
+        els.orderList.innerHTML = "";
         snap.forEach(doc => {
           const d = doc.data();
           const card = document.createElement("div");
@@ -168,7 +180,7 @@
                 <button class="btn small" onclick="updateOrder('${doc.id}','canceled')">Cancelado</button>
               </div>
             </div>`;
-          els.listOrders.appendChild(card);
+          els.orderList.appendChild(card);
         });
       }
 
