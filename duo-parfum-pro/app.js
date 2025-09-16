@@ -8,214 +8,164 @@ const firebaseConfig = {
   appId: "1:889684986920:web:9d452daf2192124b19391d"
 };
 const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
-const WHATSAPP_PHONE = "5566992254072";
 /* =================================== */
 
 let app, db, auth;
+
 document.addEventListener("DOMContentLoaded", async () => {
   app = firebase.initializeApp(firebaseConfig);
   auth = firebase.auth();
   db = firebase.firestore();
 
-  document.getElementById("year").textContent = new Date().getFullYear();
-  const els = {
-    grid: byId("grid"),
-    empty: byId("emptyState"),
-    q: byId("q"),
-    btnSearch: byId("btnSearch"),
-    filterCategory: byId("filterCategory"),
-    filterSort: byId("filterSort"),
-    btnClearFilters: byId("btnClearFilters"),
-    btnCart: byId("btnCart"),
-    cartDrawer: byId("cartDrawer"),
-    closeCart: byId("closeCart"),
-    cartItems: byId("cartItems"),
-    cartTotal: byId("cartTotal"),
-    cartCount: byId("cartCount"),
-    btnCheckout: byId("btnCheckout"),
-    btnLogin: byId("btnLogin"),
-    btnLogout: byId("btnLogout"),
-    linkAdmin: byId("linkAdmin"),
-    productModal: byId("productModal"),
-    pmImg: byId("pmImg"),
-    pmName: byId("pmName"),
-    pmBrand: byId("pmBrand"),
-    pmNotes: byId("pmNotes"),
-    pmPrice: byId("pmPrice"),
-    pmMl: byId("pmMl"),
-    pmAdd: byId("pmAdd"),
-    pmFav: byId("pmFav"),
-    closeModal: byId("closeModal"),
-    // checkout
-    checkoutModal: byId("checkoutModal"),
-    closeCheckout: byId("closeCheckout"),
-    ckName: byId("ckName"),
-    ckCep: byId("ckCep"),
-    ckAddress: byId("ckAddress"),
-    ckPayment: byId("ckPayment"),
-    ckConfirm: byId("ckConfirm"),
-  };
+  const els = mapIds([
+    "grid","emptyState","q","btnSearch","filterCategory","filterSort","btnClearFilters",
+    "btnCart","cartDrawer","closeCart","cartItems","cartTotal","cartCount","btnCheckout",
+    "btnLogin","btnLogout","linkAdmin",
+    "productModal","pmImg","pmName","pmBrand","pmNotes","pmPrice","pmMl","pmAdd","pmFav","closeModal",
+    "checkoutModal","closeCheckout","ckName","ckCep","ckAddress","ckPayment","ckConfirm","paymentArea","year"
+  ]);
 
+  els.year.textContent = new Date().getFullYear();
+
+  /* ==== Auth ==== */
   auth.onAuthStateChanged(user => {
     const logged = !!user;
-    els.btnLogin.classList.toggle("hidden", logged);
-    els.btnLogout.classList.toggle("hidden", !logged);
-    const isAdmin = logged && ADMIN_EMAILS.includes(user.email);
-    els.linkAdmin.classList.toggle("hidden", !isAdmin);
+    toggle(els.btnLogin, logged);
+    toggle(els.btnLogout, !logged);
+    toggle(els.linkAdmin, !(logged && ADMIN_EMAILS.includes(user?.email)));
   });
 
-  els.btnLogin.addEventListener("click", async ()=>{
+  els.btnLogin.onclick = async ()=>{
     const provider = new firebase.auth.GoogleAuthProvider();
     await auth.signInWithPopup(provider);
-  });
-  els.btnLogout.addEventListener("click", ()=> auth.signOut());
+  };
+  els.btnLogout.onclick = ()=> auth.signOut();
 
-  els.btnSearch.addEventListener("click", renderProducts);
-  els.filterCategory.addEventListener("change", renderProducts);
-  els.filterSort.addEventListener("change", renderProducts);
-  els.btnClearFilters.addEventListener("click", ()=>{
-    els.q.value = "";
-    els.filterCategory.value = "";
-    els.filterSort.value = "featured";
-    renderProducts();
-  });
+  /* ==== Filtros ==== */
+  els.btnSearch.onclick = renderProducts;
+  els.filterCategory.onchange = renderProducts;
+  els.filterSort.onchange = renderProducts;
+  els.btnClearFilters.onclick = ()=>{
+    els.q.value=""; els.filterCategory.value=""; els.filterSort.value="featured"; renderProducts();
+  };
 
-  els.btnCart.addEventListener("click", ()=> openDrawer(true));
-  els.closeCart.addEventListener("click", ()=> openDrawer(false));
-
-  // novo: abrir modal de checkout
-  els.btnCheckout.addEventListener("click", ()=>{
-    if(!window.__STATE.cart.length){
-      alert("Seu carrinho está vazio.");
-      return;
-    }
+  /* ==== Carrinho ==== */
+  els.btnCart.onclick = ()=> openDrawer(true);
+  els.closeCart.onclick = ()=> openDrawer(false);
+  els.btnCheckout.onclick = ()=>{
+    if(!state.cart.length){ alert("Seu carrinho está vazio."); return; }
     els.checkoutModal.showModal();
-  });
-  els.closeCheckout.addEventListener("click", ()=> els.checkoutModal.close());
-  els.ckConfirm.addEventListener("click", confirmCheckout);
+  };
+  els.closeCheckout.onclick = ()=> els.checkoutModal.close();
 
-  els.closeModal.addEventListener("click", ()=> closeModal());
+  els.closeModal.onclick = ()=> closeModal();
+  els.ckConfirm.onclick = confirmCheckout;
 
-  window.__STATE = { products: [], cart: loadCart(), selected: null };
+  /* ==== State ==== */
+  const state = window.__STATE = { products: [], cart: loadCart(), selected: null };
 
   await loadProducts();
   renderProducts();
   updateCartUI();
 
+  /* ==== Funções ==== */
   async function loadProducts(){
     const snap = await db.collection("products").orderBy("createdAt","desc").get().catch(()=>null);
-    if(!snap){ window.__STATE.products = seedFallback(); return; }
-    const list = [];
+    if(!snap){ state.products = []; return; }
+    const list=[];
     snap.forEach(doc=>{
-      const d = doc.data();
+      const d=doc.data();
       list.push({
-        id: doc.id,
-        name: d.name, brand: d.brand, price: d.price,
-        ml: d.ml, notes: d.notes, category: d.category || "",
-        image: d.image || "", featured: !!d.featured, stock: d.stock ?? 0,
-        createdAt: d.createdAt?.toDate?.() || new Date()
+        id:doc.id,
+        name:d.name,brand:d.brand,price:d.price,
+        ml:d.ml,notes:d.notes,category:d.category||"",
+        image:d.image||"",featured:!!d.featured,stock:d.stock??0,
+        createdAt:d.createdAt?.toDate?.()||new Date()
       });
     });
-    window.__STATE.products = list.length ? list : seedFallback();
+    state.products=list;
   }
 
   function renderProducts(){
-    const q = els.q.value?.trim().toLowerCase();
-    const cat = els.filterCategory.value;
-    const sort = els.filterSort.value;
+    const q=els.q.value?.trim().toLowerCase();
+    const cat=els.filterCategory.value;
+    const sort=els.filterSort.value;
 
-    let items = [...window.__STATE.products];
-    if(q){
-      items = items.filter(p =>
-        (p.name || "").toLowerCase().includes(q) ||
-        (p.brand || "").toLowerCase().includes(q) ||
-        (p.notes || "").toLowerCase().includes(q)
-      );
-    }
-    if(cat){ items = items.filter(p => (p.category||"") === cat); }
-    if(sort === "price_asc") items.sort((a,b)=> a.price - b.price);
-    if(sort === "price_desc") items.sort((a,b)=> b.price - a.price);
-    if(sort === "newest") items.sort((a,b)=> b.createdAt - a.createdAt);
-    if(sort === "featured") items.sort((a,b)=> (b.featured?1:0) - (a.featured?1:0));
+    let items=[...state.products];
+    if(q) items=items.filter(p=> (p.name||"").toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.notes||"").toLowerCase().includes(q));
+    if(cat) items=items.filter(p=> (p.category||"")===cat);
+    if(sort==="price_asc") items.sort((a,b)=>a.price-b.price);
+    if(sort==="price_desc") items.sort((a,b)=>b.price-a.price);
+    if(sort==="newest") items.sort((a,b)=>b.createdAt-a.createdAt);
+    if(sort==="featured") items.sort((a,b)=>(b.featured?1:0)-(a.featured?1:0));
 
-    els.grid.innerHTML = "";
-    if(!items.length){
-      els.empty.classList.remove("hidden");
-      return;
-    }
-    els.empty.classList.add("hidden");
+    els.grid.innerHTML="";
+    if(!items.length){ els.emptyState.classList.remove("hidden"); return; }
+    els.emptyState.classList.add("hidden");
 
     for(const p of items){
-      const card = document.createElement("article");
-      card.className = "card";
-      card.innerHTML = `
-        <img src="${sanitizeImg(p.image)}" alt="${escapeHtml(p.name)}" onerror="this.src='https://picsum.photos/seed/perfume${Math.floor(Math.random()*1000)}/600/400'">
+      const card=document.createElement("article");
+      card.className="card";
+      card.innerHTML=`
+        <img src="${sanitizeImg(p.image)}" alt="${escapeHtml(p.name)}">
         <div class="pad">
           <div class="title">${escapeHtml(p.name)}</div>
-          <div class="brand">${escapeHtml(p.brand || "")}</div>
+          <div class="brand">${escapeHtml(p.brand||"")}</div>
           <div class="price-row">
             <strong>${formatBRL(p.price)}</strong>
-            <span class="chip">${p.ml || ""}</span>
+            <span class="chip">${p.ml||""}</span>
           </div>
           <div class="row gap" style="margin-top:10px">
-            <button class="btn add">Adicionar</button>
+            <button class="btn add-to-cart">Adicionar</button>
             <button class="btn ghost more">Ver</button>
           </div>
-        </div>
-      `;
-      card.querySelector(".add").addEventListener("click", ()=> addToCart(p));
-      card.querySelector(".more").addEventListener("click", ()=> openModal(p));
+        </div>`;
+      card.querySelector(".add-to-cart").onclick=()=> addToCart(p);
+      card.querySelector(".more").onclick=()=> openModal(p);
       els.grid.appendChild(card);
     }
   }
 
-  function openDrawer(show){
-    els.cartDrawer.classList.toggle("hidden", !show);
-    els.cartDrawer.setAttribute("aria-hidden", show ? "false" : "true");
-  }
-
+  function openDrawer(show){ els.cartDrawer.classList.toggle("hidden", !show); }
   function openModal(p){
-    window.__STATE.selected = p;
-    els.pmImg.src = sanitizeImg(p.image);
-    els.pmImg.onerror = ()=> (els.pmImg.src = `https://picsum.photos/seed/perfume${Math.floor(Math.random()*1000)}/600/400`);
-    els.pmName.textContent = p.name;
-    els.pmBrand.textContent = p.brand || "";
-    els.pmNotes.textContent = p.notes || "";
-    els.pmPrice.textContent = formatBRL(p.price);
-    els.pmMl.textContent = p.ml || "";
-    els.pmAdd.onclick = ()=> addToCart(p, 1, true);
-    els.pmFav.onclick = ()=> toggleFav(p);
+    state.selected=p;
+    els.pmImg.src=sanitizeImg(p.image);
+    els.pmName.textContent=p.name;
+    els.pmBrand.textContent=p.brand||"";
+    els.pmNotes.textContent=p.notes||"";
+    els.pmPrice.textContent=formatBRL(p.price);
+    els.pmMl.textContent=p.ml||"";
+    els.pmAdd.onclick=()=> addToCart(p,1,true);
+    els.pmFav.onclick=()=> toggleFav(p);
     els.productModal.showModal();
   }
   function closeModal(){ els.productModal.close(); }
-
   function toggleFav(p){
-    const favs = new Set(JSON.parse(localStorage.getItem("favs")||"[]"));
+    const favs=new Set(JSON.parse(localStorage.getItem("favs")||"[]"));
     if(favs.has(p.id)) favs.delete(p.id); else favs.add(p.id);
     localStorage.setItem("favs", JSON.stringify([...favs]));
     alert("Favoritos atualizados ✨");
   }
 
-  function addToCart(p, qty=1, close=true){
-    const cart = window.__STATE.cart;
-    const idx = cart.findIndex(i=> i.id===p.id);
-    if(idx>=0) cart[idx].qty += qty; else cart.push({id:p.id,name:p.name,price:p.price,img:p.image,qty,ml:p.ml});
-    saveCart(cart);
-    updateCartUI();
-    openDrawer(true);
-    if(close) closeModal();
+  function addToCart(p,qty=1,close=true){
+    const cart=state.cart;
+    const idx=cart.findIndex(i=>i.id===p.id);
+    if(idx>=0) cart[idx].qty+=qty; else cart.push({id:p.id,name:p.name,price:p.price,img:p.image,qty,ml:p.ml});
+    saveCart(cart); updateCartUI(); openDrawer(true); if(close) closeModal();
   }
+  function changeQty(id,delta){
+    const it=state.cart.find(i=>i.id===id); if(!it) return;
+    it.qty+=delta; if(it.qty<=0) state.cart=state.cart.filter(i=>i.id!==id);
+    saveCart(state.cart); updateCartUI();
+  }
+  function removeItem(id){ state.cart=state.cart.filter(i=>i.id!==id); saveCart(state.cart); updateCartUI(); }
 
   function updateCartUI(){
-    const cart = window.__STATE.cart;
-    els.cartItems.innerHTML = "";
-    let total = 0, count = 0;
-    for(const item of cart){
-      total += item.price * item.qty;
-      count += item.qty;
-      const row = document.createElement("div");
-      row.className = "cart-item";
-      row.innerHTML = `
+    els.cartItems.innerHTML=""; let total=0,count=0;
+    for(const item of state.cart){
+      total+=item.price*item.qty; count+=item.qty;
+      const row=document.createElement("div"); row.className="cart-item";
+      row.innerHTML=`
         <img src="${sanitizeImg(item.img)}" alt="">
         <div>
           <div style="font-weight:600">${escapeHtml(item.name)}</div>
@@ -223,106 +173,68 @@ document.addEventListener("DOMContentLoaded", async () => {
           <div class="muted">${formatBRL(item.price)}</div>
         </div>
         <div class="qty">
-          <button aria-label="Diminuir">-</button>
+          <button>-</button>
           <span>${item.qty}</span>
-          <button aria-label="Aumentar">+</button>
-          <button aria-label="Remover" title="Remover" style="margin-left:4px">🗑️</button>
-        </div>
-      `;
-      const [btnMinus, , btnPlus, btnDel] = row.querySelectorAll("button");
-      btnMinus.onclick = ()=> changeQty(item.id, -1);
-      btnPlus.onclick = ()=> changeQty(item.id, +1);
-      btnDel.onclick  = ()=> removeItem(item.id);
+          <button>+</button>
+          <button title="Remover">🗑️</button>
+        </div>`;
+      const [btnMinus,,btnPlus,btnDel]=row.querySelectorAll("button");
+      btnMinus.onclick=()=>changeQty(item.id,-1);
+      btnPlus.onclick=()=>changeQty(item.id,1);
+      btnDel.onclick=()=>removeItem(item.id);
       els.cartItems.appendChild(row);
     }
-    els.cartTotal.textContent = formatBRL(total);
-    els.cartCount.textContent = count;
+    els.cartTotal.textContent=formatBRL(total);
+    els.cartCount.textContent=count;
   }
 
-  function changeQty(id, delta){
-    const cart = window.__STATE.cart;
-    const it = cart.find(i=>i.id===id);
-    if(!it) return;
-    it.qty += delta;
-    if(it.qty<=0) window.__STATE.cart = cart.filter(i=>i.id!==id);
-    saveCart(window.__STATE.cart);
-    updateCartUI();
-  }
-  function removeItem(id){
-    window.__STATE.cart = window.__STATE.cart.filter(i=>i.id!==id);
-    saveCart(window.__STATE.cart); updateCartUI();
-  }
-
-  // ====== NOVO: confirmar checkout, criar pedido e abrir WhatsApp ======
   async function confirmCheckout(){
-    const name = els.ckName.value.trim();
-    const cep = els.ckCep.value.trim();
-    const address = els.ckAddress.value.trim();
-    const payment = els.ckPayment.value;
+    const name=els.ckName.value.trim();
+    const cep=els.ckCep.value.trim();
+    const address=els.ckAddress.value.trim();
+    const payment=els.ckPayment.value;
+    if(!name||!cep||!address){ alert("Preencha todos os campos."); return; }
+    if(!state.cart.length){ alert("Carrinho vazio."); return; }
 
-    if(!name || !cep || !address){
-      alert("Preencha Nome, CEP e Endereço.");
-      return;
-    }
-    const cart = window.__STATE.cart;
-    if(!cart.length){ alert("Seu carrinho está vazio."); return; }
-
-    // monta dados
-    const total = cart.reduce((s,i)=> s+i.price*i.qty, 0);
-    const order = {
-      items: cart.map(i => ({
-        id: i.id, name: i.name, ml: i.ml || "", price: i.price, qty: i.qty
-      })),
+    const total=state.cart.reduce((s,i)=>s+i.price*i.qty,0);
+    const order={
+      items: state.cart.map(i=>({id:i.id,name:i.name,ml:i.ml||"",price:i.price,qty:i.qty})),
       total,
-      createdAt: new Date(),
-      status: "pending",
-      customer: { name, cep, address, payment }
+      createdAt:new Date(),
+      status:"pending",
+      customer:{name,cep,address,payment}
     };
 
-    // grava no Firestore
-    let orderId = "";
+    // Salva no Firestore
+    let orderId="";
     try{
-      const ref = await db.collection("orders").add(order);
-      orderId = ref.id;
-    }catch(err){
-      console.error(err);
-      alert("Não foi possível registrar o pedido. Tente novamente.");
-      return;
+      const ref=await db.collection("orders").add(order);
+      orderId=ref.id;
+    }catch(e){ alert("Erro ao salvar pedido."); return; }
+
+    // Chama API de pagamento
+    try{
+      const resp=await fetch("/api/payment",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId,order})});
+      const data=await resp.json();
+      if(data.error) throw new Error(data.error);
+
+      if(payment==="pix"){
+        els.paymentArea.innerHTML=`<p>Escaneie o QRCode para pagar:</p><img src="data:image/png;base64,${data.qr}" style="max-width:200px"><p>Código Copia e Cola:</p><textarea readonly style="width:100%">${data.code}</textarea>`;
+      }else if(payment==="card"){
+        els.paymentArea.innerHTML=`<a href="${data.link}" target="_blank" class="btn">Pagar com cartão</a>`;
+      }
+    }catch(e){
+      console.error(e);
+      alert("Erro ao gerar pagamento.");
     }
-
-    // mensagem WhatsApp
-    const lines = cart.map(i=> `• ${i.name} (${i.ml||""}) x${i.qty} — ${formatBRL(i.price*i.qty)}`);
-    lines.push(`\nTotal: *${formatBRL(total)}*`);
-    lines.push(`\nCliente: ${name}\nCEP: ${cep}\nEndereço: ${address}\nPagamento: ${payment}`);
-    lines.push(`\nPedido nº: ${orderId}`);
-    const msg = encodeURIComponent(`Olá! Quero confirmar meu pedido:\n\n${lines.join("\n")}`);
-    const url = `https://wa.me/${WHATSAPP_PHONE}?text=${msg}`;
-    window.open(url, "_blank");
-
-    // fecha modal e limpa carrinho
-    els.checkoutModal.close();
-    window.__STATE.cart = [];
-    saveCart(window.__STATE.cart);
-    updateCartUI();
   }
-  // ===============================================================
 
-  function loadCart(){ try{return JSON.parse(localStorage.getItem("cart")||"[]");}catch{ return [] } }
-  function saveCart(v){ localStorage.setItem("cart", JSON.stringify(v)); }
-  function byId(id){ return document.getElementById(id); }
-  function formatBRL(n){ return n?.toLocaleString?.("pt-BR",{style:"currency",currency:"BRL"}) ?? "R$ 0,00"; }
-  function sanitizeImg(src){ return src || "https://picsum.photos/seed/duoparfum/600/400"; }
-  function escapeHtml(s=""){ return s.replace(/[&<>"']/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m])); }
-
-  function seedFallback(){
-    const now = new Date();
-    return [
-      {id:"1",name:"La Vie Est Belle",brand:"Lancôme",price:549.9,ml:"100 ml",notes:"Gourmand floral com íris e patchouli.",category:"Importado",image:"",featured:true,stock:8,createdAt:now},
-      {id:"2",name:"Good Girl",brand:"Carolina Herrera",price:589.9,ml:"80 ml",notes:"Doce oriental com jasmim e fava tonka.",category:"Importado",image:"",featured:true,stock:5,createdAt:now},
-      {id:"3",name:"212 VIP Men",brand:"Carolina Herrera",price:479.9,ml:"100 ml",notes:"Amadeirado especiado com rum e couro.",category:"Importado",image:"",featured:false,stock:7,createdAt:now},
-      {id:"4",name:"Quasar",brand:"O Boticário",price:169.9,ml:"100 ml",notes:"Aromático fresco, versátil.",category:"Nacional",image:"",featured:false,stock:12,createdAt:now},
-      {id:"5",name:"Decant Sauvage",brand:"Dior",price:59.9,ml:"10 ml",notes:"Cítrico aromático, ambroxan.",category:"Decant",image:"",featured:true,stock:30,createdAt:now},
-      {id:"6",name:"Decant Bleu de Chanel",brand:"Chanel",price:69.9,ml:"10 ml",notes:"Amadeirado cítrico, incenso.",category:"Decant",image:"",featured:false,stock:22,createdAt:now}
-    ]
-  }
+  /* ==== Helpers ==== */
+  function mapIds(ids){const o={};ids.forEach(id=>o[id]=document.getElementById(id));return o;}
+  function toggle(el,h){el.classList.toggle("hidden",h);}
+  function loadCart(){try{return JSON.parse(localStorage.getItem("cart")||"[]");}catch{return []}}
+  function saveCart(v){localStorage.setItem("cart",JSON.stringify(v));}
+  function formatBRL(n){return n?.toLocaleString?.("pt-BR",{style:"currency",currency:"BRL"})??"R$ 0,00";}
+  function sanitizeImg(src){return src||"https://picsum.photos/seed/duoparfum/600/400";}
+  function escapeHtml(s=""){return s.replace(/[&<>\"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
 });
