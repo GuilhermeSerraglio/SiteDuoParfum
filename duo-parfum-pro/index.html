@@ -139,5 +139,31 @@
       </div>
     </div>
   </dialog>
+  <!-- Modal Checkout -->
+<dialog id="checkoutModal" class="modal">
+  <div class="modal-card">
+    <button id="closeCheckout" class="icon-btn close">✖</button>
+    <div class="modal-body">
+      <div class="modal-info" style="grid-column:1/-1">
+        <h3>Finalizar pedido</h3>
+        <p class="muted">Preencha seus dados e confirmaremos pelo WhatsApp.</p>
+        <div class="row wrap" style="margin-top:8px">
+          <input id="ckName" placeholder="Nome completo" style="flex:1;min-width:220px;border:1px solid var(--border);border-radius:12px;padding:10px">
+          <input id="ckCep" placeholder="CEP" style="width:160px;border:1px solid var(--border);border-radius:12px;padding:10px">
+          <input id="ckAddress" placeholder="Endereço completo" style="flex:1;min-width:260px;border:1px solid var(--border);border-radius:12px;padding:10px">
+          <select id="ckPayment" style="width:200px;border:1px solid var(--border);border-radius:12px;padding:10px">
+            <option value="Pix">Pix</option>
+            <option value="Cartão">Cartão</option>
+            <option value="Dinheiro">Dinheiro</option>
+          </select>
+        </div>
+        <div class="row gap" style="margin-top:14px">
+          <button id="ckConfirm" class="btn">Confirmar e enviar no WhatsApp</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</dialog>
+
 </body>
 </html>

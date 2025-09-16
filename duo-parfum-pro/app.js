@@ -1,4 +1,4 @@
-/* ========= CONFIGURE O FIREBASE AQUI ========= */
+/* ========= CONFIG FIREBASE ========= */
 const firebaseConfig = {
   apiKey: "AIzaSyDVkpsr4z6LolEOkNTGcc9TmKeiu4-mi1Y",
   authDomain: "duoparfum-61ec2.firebaseapp.com",
@@ -9,7 +9,7 @@ const firebaseConfig = {
 };
 const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
 const WHATSAPP_PHONE = "5566992254072";
-/* ============================================ */
+/* =================================== */
 
 let app, db, auth;
 document.addEventListener("DOMContentLoaded", async () => {
@@ -45,7 +45,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     pmMl: byId("pmMl"),
     pmAdd: byId("pmAdd"),
     pmFav: byId("pmFav"),
-    closeModal: byId("closeModal")
+    closeModal: byId("closeModal"),
+    // checkout
+    checkoutModal: byId("checkoutModal"),
+    closeCheckout: byId("closeCheckout"),
+    ckName: byId("ckName"),
+    ckCep: byId("ckCep"),
+    ckAddress: byId("ckAddress"),
+    ckPayment: byId("ckPayment"),
+    ckConfirm: byId("ckConfirm"),
   };
 
   auth.onAuthStateChanged(user => {
@@ -74,7 +82,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   els.btnCart.addEventListener("click", ()=> openDrawer(true));
   els.closeCart.addEventListener("click", ()=> openDrawer(false));
-  els.btnCheckout.addEventListener("click", checkoutWhatsApp);
+
+  // novo: abrir modal de checkout
+  els.btnCheckout.addEventListener("click", ()=>{
+    if(!window.__STATE.cart.length){
+      alert("Seu carrinho está vazio.");
+      return;
+    }
+    els.checkoutModal.showModal();
+  });
+  els.closeCheckout.addEventListener("click", ()=> els.checkoutModal.close());
+  els.ckConfirm.addEventListener("click", confirmCheckout);
 
   els.closeModal.addEventListener("click", ()=> closeModal());
 
@@ -235,16 +253,59 @@ document.addEventListener("DOMContentLoaded", async () => {
     saveCart(window.__STATE.cart); updateCartUI();
   }
 
-  function checkoutWhatsApp(){
+  // ====== NOVO: confirmar checkout, criar pedido e abrir WhatsApp ======
+  async function confirmCheckout(){
+    const name = els.ckName.value.trim();
+    const cep = els.ckCep.value.trim();
+    const address = els.ckAddress.value.trim();
+    const payment = els.ckPayment.value;
+
+    if(!name || !cep || !address){
+      alert("Preencha Nome, CEP e Endereço.");
+      return;
+    }
     const cart = window.__STATE.cart;
     if(!cart.length){ alert("Seu carrinho está vazio."); return; }
+
+    // monta dados
     const total = cart.reduce((s,i)=> s+i.price*i.qty, 0);
+    const order = {
+      items: cart.map(i => ({
+        id: i.id, name: i.name, ml: i.ml || "", price: i.price, qty: i.qty
+      })),
+      total,
+      createdAt: new Date(),
+      status: "pending",
+      customer: { name, cep, address, payment }
+    };
+
+    // grava no Firestore
+    let orderId = "";
+    try{
+      const ref = await db.collection("orders").add(order);
+      orderId = ref.id;
+    }catch(err){
+      console.error(err);
+      alert("Não foi possível registrar o pedido. Tente novamente.");
+      return;
+    }
+
+    // mensagem WhatsApp
     const lines = cart.map(i=> `• ${i.name} (${i.ml||""}) x${i.qty} — ${formatBRL(i.price*i.qty)}`);
     lines.push(`\nTotal: *${formatBRL(total)}*`);
-    const msg = encodeURIComponent(`Olá! Quero finalizar meu pedido:\n\n${lines.join("\n")}\n\nNome:\nCEP:\nForma de pagamento: Pix / Cartão / Dinheiro`);
+    lines.push(`\nCliente: ${name}\nCEP: ${cep}\nEndereço: ${address}\nPagamento: ${payment}`);
+    lines.push(`\nPedido nº: ${orderId}`);
+    const msg = encodeURIComponent(`Olá! Quero confirmar meu pedido:\n\n${lines.join("\n")}`);
     const url = `https://wa.me/${WHATSAPP_PHONE}?text=${msg}`;
     window.open(url, "_blank");
+
+    // fecha modal e limpa carrinho
+    els.checkoutModal.close();
+    window.__STATE.cart = [];
+    saveCart(window.__STATE.cart);
+    updateCartUI();
   }
+  // ===============================================================
 
   function loadCart(){ try{return JSON.parse(localStorage.getItem("cart")||"[]");}catch{ return [] } }
   function saveCart(v){ localStorage.setItem("cart", JSON.stringify(v)); }

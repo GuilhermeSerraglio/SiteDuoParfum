@@ -5,12 +5,63 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Admin — Duo Parfum</title>
   <link rel="stylesheet" href="./style.css" />
+
   <!-- Firebase -->
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore-compat.js"></script>
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-storage-compat.js"></script>
-  <script defer>
+
+  <style>
+    .qtyBtn{width:28px;height:28px;border:1px solid var(--border);background:var(--surface);border-radius:8px;cursor:pointer;font-weight:bold;}
+    .chip{padding:2px 6px;border-radius:6px;font-size:12px;background:var(--border);}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="container row between center">
+      <a class="brand-wrap" href="./">
+        <img class="brand-logo" src="./assets/logo.jpg" alt="Duo Parfum logo"/>
+        <span class="brand-name">Duo Parfum</span>
+      </a>
+      <div class="row">
+        <button id="btnLogin" class="btn ghost">Entrar</button>
+        <button id="btnLogout" class="btn ghost">Sair</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container" style="padding:20px 0">
+    <h2>Adicionar / editar produto</h2>
+    <form id="form" class="card" style="padding:16px;gap:10px">
+      <div class="row wrap">
+        <input id="name" required placeholder="Nome" style="flex:2;min-width:220px">
+        <input id="brand" placeholder="Marca" style="flex:1;min-width:160px">
+        <input id="price" required type="number" step="0.01" placeholder="Preço (R$)" style="width:160px">
+        <input id="ml" placeholder="Volume (ex: 10 ml)" style="width:160px">
+        <select id="category" style="width:180px">
+          <option>Decant</option><option>Importado</option><option>Nacional</option><option>Tester</option>
+        </select>
+        <input id="image" placeholder="URL da imagem (opcional)" style="flex:2;min-width:220px">
+        <input id="imageFile" type="file" accept="image/*" style="min-width:220px">
+        <input id="stock" type="number" placeholder="Estoque" style="width:120px">
+      </div>
+      <textarea id="notes" rows="3" placeholder="Notas/descrição" style="width:100%"></textarea>
+      <label><input id="featured" type="checkbox"> Destacar no catálogo</label>
+      <div class="row gap">
+        <button id="submit" class="btn" type="submit"><span id="submitLabel">Salvar produto</span></button>
+        <button id="btnCancel" class="btn ghost" type="button">Cancelar edição</button>
+      </div>
+    </form>
+
+    <h2 style="margin-top:24px">Produtos</h2>
+    <div id="list" class="grid"></div>
+
+    <h2 style="margin-top:24px">Pedidos</h2>
+    <div id="orders" class="grid"></div>
+  </main>
+
+  <script>
     const firebaseConfig = {
       apiKey: "AIzaSyDVkpsr4z6LolEOkNTGcc9TmKeiu4-mi1Y",
       authDomain: "duoparfum-61ec2.firebaseapp.com",
@@ -35,11 +86,10 @@
       auth.onAuthStateChanged(async (user)=>{
         if(!user){ window.location.href = "./"; return; }
         if(!ADMIN_EMAILS.includes(user.email)){
-          alert("Acesso negado.");
-          window.location.href="./";
-          return;
+          alert("Acesso negado."); window.location.href="./"; return;
         }
         loadList();
+        loadOrders();
       });
 
       $("btnLogin").onclick = async ()=>{
@@ -49,18 +99,14 @@
       $("btnLogout").onclick = ()=> auth.signOut();
 
       $("btnCancel").onclick = ()=>{
-        editingId = null;
-        $("form").reset();
+        editingId = null; $("form").reset();
         $("submitLabel").textContent = "Salvar produto";
       };
 
       $("form").addEventListener("submit", async (e)=>{
         e.preventDefault();
         const data = collectFormData();
-        if(!data.name || !data.price){
-          alert("Nome e preço são obrigatórios.");
-          return;
-        }
+        if(!data.name || !data.price){ alert("Nome e preço obrigatórios."); return; }
 
         const file = $("imageFile").files[0];
         try{
@@ -68,46 +114,32 @@
           $("submitLabel").textContent = editingId ? "Atualizando…" : "Salvando…";
 
           if(editingId){
-            if(file){
-              data.image = await uploadImage(file, editingId);
-            }
+            if(file){ data.image = await uploadImage(file, editingId); }
             data.updatedAt = new Date();
             await db.collection("products").doc(editingId).update(data);
             alert("Produto atualizado!");
           }else{
-            const ref = await db.collection("products").add({
-              ...data,
-              createdAt: new Date()
-            });
-            if(file){
-              const url = await uploadImage(file, ref.id);
-              await ref.update({ image: url });
-            }
+            const ref = await db.collection("products").add({...data,createdAt:new Date()});
+            if(file){ const url = await uploadImage(file, ref.id); await ref.update({ image: url }); }
             alert("Produto cadastrado!");
           }
-
-          e.target.reset();
-          editingId = null;
-          $("submitLabel").textContent = "Salvar produto";
+          e.target.reset(); editingId=null;
+          $("submitLabel").textContent="Salvar produto";
           loadList();
-        }catch(err){
-          console.error(err);
-          alert("Erro: " + (err.message||err));
-        }finally{
-          $("submit").disabled = false;
-        }
+        }catch(err){ alert("Erro: "+err.message); }
+        finally{ $("submit").disabled=false; }
       });
 
       async function loadList(){
         const box = $("list");
         box.innerHTML = "<p class='muted'>Carregando…</p>";
         const snap = await db.collection("products").orderBy("createdAt","desc").get();
-        box.innerHTML = "";
+        box.innerHTML="";
         snap.forEach(doc=>{
           const d = doc.data();
           const row = document.createElement("div");
-          row.className = "card";
-          row.innerHTML = `
+          row.className="card";
+          row.innerHTML=`
             <div class="pad">
               <div class="row between wrap">
                 <div>
@@ -119,7 +151,7 @@
                     <button class="qtyBtn" data-act="inc">+</button>
                   </div>
                 </div>
-                <img src="${sanitizeImg(d.image)}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--border)" alt="">
+                <img src="${sanitizeImg(d.image)}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--border)">
               </div>
               <div class="row gap" style="margin-top:10px">
                 <button class="btn ghost" data-act="edit">Editar</button>
@@ -127,113 +159,83 @@
               </div>
             </div>
           `;
-          row.querySelector('[data-act="edit"]').onclick = ()=> startEdit(doc.id, d);
-          row.querySelector('[data-act="del"]').onclick = async ()=>{
-            if(confirm("Excluir este produto?")){
-              await db.collection("products").doc(doc.id).delete();
-              loadList();
-            }
-          };
-          // Controle de estoque
-          row.querySelector('[data-act="inc"]').onclick = async ()=>{
-            const newStock = (d.stock??0)+1;
-            await db.collection("products").doc(doc.id).update({stock:newStock});
-            loadList();
-          };
-          row.querySelector('[data-act="dec"]').onclick = async ()=>{
-            const newStock = Math.max((d.stock??0)-1,0);
-            await db.collection("products").doc(doc.id).update({stock:newStock});
-            loadList();
-          };
+          row.querySelector('[data-act="edit"]').onclick=()=> startEdit(doc.id,d);
+          row.querySelector('[data-act="del"]').onclick=async()=>{ if(confirm("Excluir?")){ await db.collection("products").doc(doc.id).delete(); loadList(); } };
+          row.querySelector('[data-act="inc"]').onclick=async()=>{ await db.collection("products").doc(doc.id).update({stock:(d.stock??0)+1}); loadList(); };
+          row.querySelector('[data-act="dec"]').onclick=async()=>{ await db.collection("products").doc(doc.id).update({stock:Math.max((d.stock??0)-1,0)}); loadList(); };
           box.appendChild(row);
         });
       }
 
-      function startEdit(id, d){
-        editingId = id;
-        $("name").value = d.name||"";
-        $("brand").value = d.brand||"";
-        $("price").value = d.price||"";
-        $("ml").value = d.ml||"";
-        $("category").value = d.category||"Decant";
-        $("image").value = d.image||"";
-        $("stock").value = d.stock??0;
-        $("notes").value = d.notes||"";
-        $("featured").checked = !!d.featured;
-        $("submitLabel").textContent = "Atualizar produto";
+      function startEdit(id,d){
+        editingId=id;
+        $("name").value=d.name||""; $("brand").value=d.brand||""; $("price").value=d.price||"";
+        $("ml").value=d.ml||""; $("category").value=d.category||"Decant";
+        $("image").value=d.image||""; $("stock").value=d.stock??0;
+        $("notes").value=d.notes||""; $("featured").checked=!!d.featured;
+        $("submitLabel").textContent="Atualizar produto";
         window.scrollTo({top:0,behavior:'smooth'});
       }
-
       function collectFormData(){
         return {
-          name: $("name").value.trim(),
-          brand: $("brand").value.trim(),
-          price: parseFloat($("price").value||"0"),
-          ml: $("ml").value.trim(),
-          notes: $("notes").value.trim(),
-          category: $("category").value,
-          image: $("image").value.trim(),
-          featured: $("featured").checked,
-          stock: parseInt($("stock").value||"0",10)
+          name:$("name").value.trim(), brand:$("brand").value.trim(),
+          price:parseFloat($("price").value||"0"), ml:$("ml").value.trim(),
+          notes:$("notes").value.trim(), category:$("category").value,
+          image:$("image").value.trim(), featured:$("featured").checked,
+          stock:parseInt($("stock").value||"0",10)
         };
       }
+      async function uploadImage(file,id){
+        const safeName=(file.name||"img").replace(/[^a-z0-9_.-]/gi,'_').toLowerCase();
+        const ref=storage.ref().child(`products/${id}/${Date.now()}_${safeName}`);
+        const snap=await ref.put(file); return await snap.ref.getDownloadURL();
+      }
 
-      async function uploadImage(file, id){
-        const safeName = (file.name||"img").replace(/[^a-z0-9_.-]/gi,'_').toLowerCase();
-        const ref = storage.ref().child(`products/${id}/${Date.now()}_${safeName}`);
-        const snap = await ref.put(file);
-        return await snap.ref.getDownloadURL();
+      // === Pedidos ===
+      async function loadOrders(){
+        const box=$("orders");
+        if(!box) return;
+        box.innerHTML="<p class='muted'>Carregando pedidos…</p>";
+        const snap=await db.collection("orders").orderBy("createdAt","desc").limit(50).get();
+        box.innerHTML="";
+        if(snap.empty){ box.innerHTML="<p class='muted'>Nenhum pedido.</p>"; return; }
+        snap.forEach(doc=>{
+          const d=doc.data();
+          const items=(d.items||[]).map(i=>`${i.name} (${i.ml||""}) x${i.qty}`).join("<br>");
+          const art=document.createElement("article");
+          art.className="card";
+          art.innerHTML=`
+            <div class="pad">
+              <div class="row between wrap">
+                <strong>Pedido #${doc.id}</strong>
+                <span class="chip">${d.status}</span>
+              </div>
+              <div class="muted" style="margin-top:6px">${new Date(d.createdAt.seconds*1000).toLocaleString("pt-BR")}</div>
+              <div style="margin-top:10px">${items}</div>
+              <div class="row between" style="margin-top:10px">
+                <div>
+                  <div><strong>${d.customer?.name||""}</strong></div>
+                  <div class="muted">${d.customer?.address||""} • CEP ${d.customer?.cep||""}</div>
+                  <div class="muted">Pagamento: ${d.customer?.payment||""}</div>
+                </div>
+                <strong>${(d.total||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}</strong>
+              </div>
+              <div class="row gap" style="margin-top:10px">
+                <button class="btn ghost" data-st="paid">Marcar pago</button>
+                <button class="btn ghost" data-st="shipped">Marcar enviado</button>
+                <button class="btn ghost" data-st="canceled">Cancelar</button>
+              </div>
+            </div>`;
+          art.querySelectorAll("button[data-st]").forEach(btn=>{
+            btn.onclick=async()=>{ await db.collection("orders").doc(doc.id).update({status:btn.dataset.st}); loadOrders(); };
+          });
+          box.appendChild(art);
+        });
       }
 
       function sanitizeImg(src){ return src || "https://picsum.photos/seed/duoparfum/300/300"; }
-      function escapeHtml(s=""){ return s.replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
+      function escapeHtml(s=""){ return s.replace(/[&<>\"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
     });
   </script>
-  <style>
-    .qtyBtn{width:28px;height:28px;border:1px solid var(--border);background:var(--surface);border-radius:8px;cursor:pointer;font-weight:bold;}
-  </style>
-</head>
-<body>
-  <header class="topbar">
-    <div class="container row between center">
-      <a class="brand-wrap" href="./">
-        <img class="brand-logo" src="./assets/logo.jpg" alt="Duo Parfum logo"/>
-        <span class="brand-name">Duo Parfum</span>
-      </a>
-      <div class="row">
-        <button id="btnLogin" class="btn ghost">Entrar</button>
-        <button id="btnLogout" class="btn ghost">Sair</button>
-      </div>
-    </div>
-  </header>
-
-  <main class="container" style="padding:20px 0">
-    <h2>Adicionar / editar produto</h2>
-    <form id="form" class="card" style="padding:16px;gap:10px">
-      <div class="row wrap">
-        <input id="name" required placeholder="Nome" style="flex:2;min-width:220px;padding:10px;border:1px solid var(--border);border-radius:10px">
-        <input id="brand" placeholder="Marca" style="flex:1;min-width:160px;padding:10px;border:1px solid var(--border);border-radius:10px">
-        <input id="price" required type="number" step="0.01" placeholder="Preço (R$)" style="width:160px;padding:10px;border:1px solid var(--border);border-radius:10px">
-        <input id="ml" placeholder="Volume (ex: 10 ml)" style="width:160px;padding:10px;border:1px solid var(--border);border-radius:10px">
-        <select id="category" style="width:180px;padding:10px;border:1px solid var(--border);border-radius:10px">
-          <option>Decant</option><option>Importado</option><option>Nacional</option><option>Tester</option>
-        </select>
-        <input id="image" placeholder="URL da imagem (opcional)" style="flex:2;min-width:220px;padding:10px;border:1px solid var(--border);border-radius:10px">
-        <input id="imageFile" type="file" accept="image/*" style="min-width:220px;padding:10px;border:1px solid var(--border);border-radius:10px">
-        <input id="stock" type="number" placeholder="Estoque" style="width:120px;padding:10px;border:1px solid var(--border);border-radius:10px">
-      </div>
-      <textarea id="notes" rows="3" placeholder="Notas/descrição" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:10px"></textarea>
-      <label style="display:flex;align-items:center;gap:8px">
-        <input id="featured" type="checkbox"> Destacar no catálogo
-      </label>
-      <div class="row gap">
-        <button id="submit" class="btn" type="submit"><span id="submitLabel">Salvar produto</span></button>
-        <button id="btnCancel" class="btn ghost" type="button">Cancelar edição</button>
-      </div>
-    </form>
-
-    <h2 style="margin-top:24px">Produtos</h2>
-    <div id="list" class="grid"></div>
-  </main>
 </body>
 </html>
