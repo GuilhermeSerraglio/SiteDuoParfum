@@ -1,70 +1,169 @@
 <!DOCTYPE html>
-<div class="row between center" style="margin-top:12px">
-<strong>Total</strong>
-<strong id="cartTotal">R$ 0,00</strong>
-</div>
-<button id="btnCheckout" class="btn" style="width:100%;margin-top:12px">Finalizar</button>
-</div>
-</aside>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Duo Parfum — Perfumes e Decants</title>
+  <meta name="description" content="Perfumes importados, nacionais e decants com envio rápido. Compre online com segurança." />
+  <meta property="og:title" content="Duo Parfum — Loja Oficial">
+  <meta property="og:description" content="Perfumes importados, nacionais e decants selecionados com carinho.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="./assets/logo.jpg">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./style.css" />
+  <link rel="icon" href="./assets/logo.jpg">
+  <!-- Firebase -->
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore-compat.js"></script>
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="container row between center">
+      <a href="./" class="brand-wrap">
+        <img class="brand-logo" src="./assets/logo.jpg" alt="Duo Parfum logo" />
+        <span class="brand-name">Duo Parfum</span>
+      </a>
+      <nav class="nav">
+        <a href="#catalogo">Catálogo</a>
+        <a href="#sobre" class="hide-mobile">Sobre</a>
+        <a href="#contato" class="hide-mobile">Contato</a>
+        <button id="btnLogin" class="btn ghost">Entrar</button>
+        <button id="btnLogout" class="btn ghost hidden">Sair</button>
+        <a href="./admin.html" id="linkAdmin" class="btn ghost hidden">Admin</a>
+        <button id="btnCart" class="icon-btn" aria-label="Abrir carrinho">🛍️<span id="cartCount" class="badge">0</span></button>
+      </nav>
+    </div>
+  </header>
 
+  <section class="hero">
+    <div class="container hero-inner">
+      <div class="hero-copy">
+        <h1>Perfumes que contam sua história</h1>
+        <p>Curadoria de importados, nacionais e decants — experiência elegante do clique à entrega.</p>
+        <div class="searchbar">
+          <input id="q" type="search" placeholder="Busque por nome, marca ou notas..." />
+          <button id="btnSearch" class="btn">Buscar</button>
+        </div>
+        <div class="filters row wrap">
+          <select id="filterCategory" aria-label="Categoria">
+            <option value="">Todas categorias</option>
+            <option>Decant</option>
+            <option>Importado</option>
+            <option>Nacional</option>
+            <option>Tester</option>
+          </select>
+          <select id="filterSort" aria-label="Ordenação">
+            <option value="featured">Destaques</option>
+            <option value="price_asc">Menor preço</option>
+            <option value="price_desc">Maior preço</option>
+            <option value="newest">Novidades</option>
+          </select>
+        </div>
+      </div>
+      <div class="hero-art">
+        <div class="hero-card">
+          <img src="./assets/logo.jpg" alt="Marca Duo Parfum" />
+        </div>
+      </div>
+    </div>
+  </section>
 
-<!-- Modal de Produto -->
-<dialog id="productModal" class="modal">
-<div class="modal-card">
-<button id="closeModal" class="icon-btn close">✖</button>
-<div class="modal-body">
-<img id="pmImg" class="modal-img" alt=""/>
-<div class="modal-info">
-<h3 id="pmName"></h3>
-<div class="muted" id="pmBrand"></div>
-<p id="pmNotes" style="margin-top:8px"></p>
-<div class="row between center" style="margin-top:8px">
-<strong id="pmPrice"></strong>
-<span class="chip" id="pmMl"></span>
-</div>
-<div class="row gap" style="margin-top:12px">
-<button id="pmAdd" class="btn">Adicionar</button>
-<button id="pmFav" class="btn ghost">Favoritar</button>
-</div>
-</div>
-</div>
-</div>
-</dialog>
+  <main class="container">
+    <h2 id="catalogo">Catálogo</h2>
+    <div id="grid" class="grid"></div>
 
+    <div id="emptyState" class="empty hidden">
+      <p>Nenhum produto encontrado. Tente limpar os filtros ou buscar outro termo.</p>
+      <button id="btnClearFilters" class="btn ghost">Limpar filtros</button>
+    </div>
 
-<!-- Modal Checkout -->
+    <section id="sobre" class="about">
+      <div class="about-card">
+        <h3>Sobre a Duo Parfum</h3>
+        <p>Somos apaixonados por fragrâncias e atendimento próximo. Trabalhamos com produtos originais e decants preparados com cuidado para você testar e se apaixonar.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer id="contato" class="footer">
+    <div class="container row between wrap">
+      <div>
+        <p>© <span id="year"></span> Duo Parfum — todos os direitos reservados.</p>
+        <small class="muted">CNPJ opcional aqui • Política de Troca e Devolução • Envio para todo o Brasil</small>
+      </div>
+      <div class="footer-contact">
+        <p>WhatsApp: <a href="https://wa.me/5599999999999" target="_blank" rel="noopener">+55 (99) 99999-9999</a></p>
+        <p>E-mail: <a href="mailto:contato@duoparfum.com.br">contato@duoparfum.com.br</a></p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Drawer Carrinho -->
+  <aside id="cartDrawer" class="drawer hidden" aria-hidden="true" aria-label="Carrinho">
+    <div class="drawer-header">
+      <h3>Seu carrinho</h3>
+      <button id="closeCart" class="icon-btn" aria-label="Fechar">✖</button>
+    </div>
+    <div id="cartItems" class="drawer-body"></div>
+    <div class="drawer-footer">
+      <div class="row between">
+        <strong>Total</strong>
+        <strong id="cartTotal">R$ 0,00</strong>
+      </div>
+      <button id="btnCheckout" class="btn">Finalizar no WhatsApp</button>
+    </div>
+  </aside>
+
+  <!-- Modal Produto -->
+  <dialog id="productModal" class="modal">
+    <div class="modal-card">
+      <button id="closeModal" class="icon-btn close">✖</button>
+      <div class="modal-body">
+        <img id="pmImg" alt="" />
+        <div class="modal-info">
+          <h3 id="pmName">Nome</h3>
+          <p id="pmBrand" class="muted"></p>
+          <p id="pmNotes"></p>
+          <div class="row between center">
+            <strong id="pmPrice">R$ 0,00</strong>
+            <span id="pmMl" class="chip"></span>
+          </div>
+          <div class="row gap">
+            <button id="pmAdd" class="btn">Adicionar ao carrinho</button>
+            <button id="pmFav" class="btn ghost">❤ Favoritar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+  <!-- Modal Checkout -->
 <dialog id="checkoutModal" class="modal">
-<div class="modal-card">
-<button id="closeCheckout" class="icon-btn close">✖</button>
-<div class="modal-body">
-<div class="modal-info" style="grid-column:1/-1">
-<h3>Finalizar pedido</h3>
-<p class="muted">Preencha seus dados e confirmaremos pelo WhatsApp.</p>
-<div class="row wrap" style="margin-top:8px">
-<input id="ckName" class="input" placeholder="Nome completo" style="flex:1;min-width:220px">
-<input id="ckCep" class="input" placeholder="CEP" style="width:160px">
-<input id="ckAddress" class="input" placeholder="Endereço completo" style="flex:1;min-width:260px">
-<select id="ckPayment" class="input" style="width:200px">
-<option value="Pix">Pix</option>
-<option value="Cartão">Cartão</option>
-<option value="Dinheiro">Dinheiro</option>
-</select>
-</div>
-<div class="row gap" style="margin-top:14px">
-<button id="ckConfirm" class="btn">Confirmar e enviar no WhatsApp</button>
-</div>
-</div>
-</div>
-</div>
+  <div class="modal-card">
+    <button id="closeCheckout" class="icon-btn close">✖</button>
+    <div class="modal-body">
+      <div class="modal-info" style="grid-column:1/-1">
+        <h3>Finalizar pedido</h3>
+        <p class="muted">Preencha seus dados e confirmaremos pelo WhatsApp.</p>
+        <div class="row wrap" style="margin-top:8px">
+          <input id="ckName" placeholder="Nome completo" style="flex:1;min-width:220px;border:1px solid var(--border);border-radius:12px;padding:10px">
+          <input id="ckCep" placeholder="CEP" style="width:160px;border:1px solid var(--border);border-radius:12px;padding:10px">
+          <input id="ckAddress" placeholder="Endereço completo" style="flex:1;min-width:260px;border:1px solid var(--border);border-radius:12px;padding:10px">
+          <select id="ckPayment" style="width:200px;border:1px solid var(--border);border-radius:12px;padding:10px">
+            <option value="Pix">Pix</option>
+            <option value="Cartão">Cartão</option>
+            <option value="Dinheiro">Dinheiro</option>
+          </select>
+        </div>
+        <div class="row gap" style="margin-top:14px">
+          <button id="ckConfirm" class="btn">Confirmar e enviar no WhatsApp</button>
+        </div>
+      </div>
+    </div>
+  </div>
 </dialog>
 
-
-<!-- Footer -->
-<footer class="footer">
-<div class="container row between wrap">
-<span>© <span id="year"></span> Duo Parfum</span>
-<a href="https://wa.me/5566992254072" target="_blank">Fale no WhatsApp</a>
-</div>
-</footer>
 </body>
 </html>
