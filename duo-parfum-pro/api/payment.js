@@ -1,3 +1,6 @@
+const https = require("https");
+const { URL } = require("url");
+
 const MP_API_BASE = "https://api.mercadopago.com";
 
 function parseBody(body) {
@@ -19,18 +22,26 @@ function buildItems(items = []) {
     .map((raw) => {
       const qtyValue = Number(raw?.qty ?? 1);
       const priceValue = Number(raw?.price ?? 0);
-      const qty = Number.isFinite(qtyValue) && qtyValue > 0 ? Math.floor(qtyValue) || 1 : 1;
-      const price = Number.isFinite(priceValue) && priceValue > 0 ? priceValue : 0;
-      const title = [raw?.name, raw?.ml].filter(Boolean).join(" ").trim() || "Produto Duo Parfum";
+      const qty =
+        Number.isFinite(qtyValue) && qtyValue > 0
+          ? Math.floor(qtyValue) || 1
+          : 1;
+      const price =
+        Number.isFinite(priceValue) && priceValue > 0 ? priceValue : 0;
+      const title =
+        [raw?.name, raw?.ml].filter(Boolean).join(" ").trim() ||
+        "Produto Duo Parfum";
       return {
         title,
         quantity: qty,
         currency_id: "BRL",
-        unit_price: Math.round(price * 100) / 100
+        unit_price: Math.round(price * 100) / 100,
       };
     })
     .filter((item) => item.unit_price > 0 && item.quantity > 0);
 }
+
+// ----------------- Funções auxiliares de cliente -----------------
 
 function sanitizeEmail(email) {
   return typeof email === "string" ? email.trim().toLowerCase() : "";
@@ -41,13 +52,18 @@ function isValidEmail(email) {
 }
 
 function buildFallbackEmail(orderId) {
-  const base = String(orderId || Date.now()).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const base = String(orderId || Date.now())
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
   const slug = base ? base.slice(0, 16) : String(Date.now());
   return `pagador+${slug}@duoparfum.com`;
 }
 
 function splitName(name) {
-  const parts = typeof name === "string" ? name.trim().split(/\s+/).filter(Boolean) : [];
+  const parts =
+    typeof name === "string"
+      ? name.trim().split(/\s+/).filter(Boolean)
+      : [];
   if (!parts.length) {
     return { firstName: "Cliente", lastName: "Duo Parfum" };
   }
@@ -56,42 +72,102 @@ function splitName(name) {
   return { firstName, lastName };
 }
 
+// ----------------- Função para enviar ao Mercado Pago -----------------
+
 async function postToMercadoPago(path, token, payload, extraHeaders = {}) {
-  const fetchFn = typeof fetch === "function" ? fetch : null;
-  if (!fetchFn) {
-    throw new Error("Fetch API indisponível no ambiente de execução");
+  const url = `${MP_API_BASE}${path}`;
+  const body = JSON.stringify(payload);
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    ...extraHeaders,
+  };
+
+  if (typeof fetch === "function") {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (err) {
+      data = null;
+    }
+
+    if (!response.ok) {
+      const message =
+        (data && (data.message || data.error)) ||
+        `Mercado Pago HTTP ${response.status}`;
+      const error = new Error(message);
+      error.details = data;
+      error.status = response.status;
+      throw error;
+    }
+
+    return data;
   }
 
-  const response = await fetchFn(`${MP_API_BASE}${path}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...extraHeaders
-    },
-    body: JSON.stringify(payload)
+  // fallback usando https.request caso fetch não esteja disponível
+  const { hostname, pathname, search } = new URL(url);
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname,
+        path: `${pathname}${search}`,
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Length": Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          raw += chunk;
+        });
+        res.on("end", () => {
+          let data = null;
+          if (raw) {
+            try {
+              data = JSON.parse(raw);
+            } catch (err) {
+              if (res.statusCode >= 200 && res.statusCode < 300) {
+                return reject(
+                  new Error("Resposta inválida do Mercado Pago")
+                );
+              }
+            }
+          }
+
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            const message =
+              (data && (data.message || data.error)) ||
+              `Mercado Pago HTTP ${res.statusCode}`;
+            const error = new Error(message);
+            error.details = data;
+            error.status = res.statusCode;
+            return reject(error);
+          }
+
+          resolve(data);
+        });
+      }
+    );
+
+    req.on("error", reject);
+    req.write(body);
+    req.end();
   });
-
-  let data = null;
-  try {
-    data = await response.json();
-  } catch (err) {
-    data = null;
-  }
-
-  if (!response.ok) {
-    const message =
-      (data && (data.message || data.error)) || `Mercado Pago HTTP ${response.status}`;
-    const error = new Error(message);
-    error.details = data;
-    error.status = response.status;
-    throw error;
-  }
-
-  return data;
 }
 
-export default async function handler(req, res) {
+// ----------------- Handler principal -----------------
+
+module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Método não permitido" });
   }
@@ -121,7 +197,8 @@ export default async function handler(req, res) {
     }
 
     const paymentType = String(order.customer?.payment || "pix").toLowerCase();
-    const rawName = typeof order.customer?.name === "string" ? order.customer.name : "";
+    const rawName =
+      typeof order.customer?.name === "string" ? order.customer.name : "";
     const customerName = rawName.trim() || "Cliente Duo Parfum";
     const { firstName, lastName } = splitName(customerName);
     const requestedEmail = sanitizeEmail(order.customer?.email);
@@ -129,11 +206,16 @@ export default async function handler(req, res) {
     const fallbackEmail = isValidEmail(configuredEmail)
       ? configuredEmail
       : buildFallbackEmail(orderId);
-    const customerEmail = isValidEmail(requestedEmail) ? requestedEmail : fallbackEmail;
+    const customerEmail = isValidEmail(requestedEmail)
+      ? requestedEmail
+      : fallbackEmail;
     const notificationUrl = process.env.MP_NOTIFICATION_URL;
     const origin =
-      req.headers?.origin || process.env.SITE_URL || "https://site-duo-parfum.vercel.app";
+      req.headers?.origin ||
+      process.env.SITE_URL ||
+      "https://site-duo-parfum.vercel.app";
 
+    // -------- PIX --------
     if (paymentType === "pix") {
       const pixPayload = {
         transaction_amount: Math.round(total * 100) / 100,
@@ -142,11 +224,11 @@ export default async function handler(req, res) {
         payer: {
           email: customerEmail,
           first_name: firstName,
-          last_name: lastName
+          last_name: lastName,
         },
         external_reference: orderId,
         binary_mode: true,
-        metadata: { orderId }
+        metadata: { orderId },
       };
 
       if (items.length) {
@@ -154,8 +236,8 @@ export default async function handler(req, res) {
           items: items.map((item) => ({
             title: item.title,
             quantity: item.quantity,
-            unit_price: item.unit_price
-          }))
+            unit_price: item.unit_price,
+          })),
         };
       }
 
@@ -164,7 +246,7 @@ export default async function handler(req, res) {
       }
 
       const pix = await postToMercadoPago("/v1/payments", token, pixPayload, {
-        "X-Idempotency-Key": orderId
+        "X-Idempotency-Key": orderId,
       });
       const tx = pix?.point_of_interaction?.transaction_data;
 
@@ -172,9 +254,12 @@ export default async function handler(req, res) {
         throw new Error("Resposta PIX inválida do Mercado Pago");
       }
 
-      return res.status(200).json({ qr: tx.qr_code_base64, code: tx.qr_code });
+      return res
+        .status(200)
+        .json({ qr: tx.qr_code_base64, code: tx.qr_code });
     }
 
+    // -------- Checkout padrão --------
     const preferencePayload = {
       items,
       external_reference: orderId,
@@ -183,25 +268,26 @@ export default async function handler(req, res) {
       metadata: { orderId },
       payer: {
         name: customerName,
-        email: customerEmail
+        email: customerEmail,
       },
       payment_methods: {
-        excluded_payment_types: [
-          { id: "ticket" },
-          { id: "atm" }
-        ]
+        excluded_payment_types: [{ id: "ticket" }, { id: "atm" }],
       },
       back_urls: {
         success: `${origin}/sucesso`,
-        failure: `${origin}/erro`
-      }
+        failure: `${origin}/erro`,
+      },
     };
 
     if (notificationUrl) {
       preferencePayload.notification_url = notificationUrl;
     }
 
-    const preference = await postToMercadoPago("/checkout/preferences", token, preferencePayload);
+    const preference = await postToMercadoPago(
+      "/checkout/preferences",
+      token,
+      preferencePayload
+    );
     const link = preference.init_point || preference.sandbox_init_point;
 
     if (!link) {
@@ -213,4 +299,4 @@ export default async function handler(req, res) {
     console.error("Erro Mercado Pago:", err);
     return res.status(500).json({ error: "Falha ao criar pagamento" });
   }
-}
+};
