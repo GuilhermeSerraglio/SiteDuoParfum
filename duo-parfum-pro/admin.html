@@ -106,6 +106,12 @@
         e.preventDefault();
         const file = els.pImage.files[0];
         let url = "";
+        const priceValue = parseFloat(els.pPrice.value);
+
+        if (!Number.isFinite(priceValue)) {
+          alert("Informe um preço válido.");
+          return;
+        }
 
         try {
           if (file) {
@@ -114,17 +120,19 @@
             url = await ref.getDownloadURL();
           }
 
+          const timestamp = firebase.firestore.FieldValue.serverTimestamp();
+
           await db.collection("products").add({
             name: els.pName.value,
             brand: els.pBrand.value,
             ml: els.pMl.value,
-            price: parseFloat(els.pPrice.value),
+            price: priceValue,
             notes: els.pNotes.value,
             category: els.pCategory.value,
             image: url,
             stock: 0,
             featured: false,
-            createdAt: new Date()
+            createdAt: timestamp
           });
 
           els.form.reset();
