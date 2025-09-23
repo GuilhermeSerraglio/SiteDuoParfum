@@ -192,10 +192,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           <button>+</button>
           <button title="Remover">🗑️</button>
         </div>`;
-      const [btnMinus,,btnPlus,btnDel]=row.querySelectorAll("button");
-      btnMinus.onclick=()=>changeQty(item.id,-1);
-      btnPlus.onclick=()=>changeQty(item.id,1);
-      btnDel.onclick=()=>removeItem(item.id);
+      const [btnMinus,btnPlus,btnDel]=row.querySelectorAll("button");
+      btnMinus?.addEventListener("click",()=>changeQty(item.id,-1));
+      btnPlus?.addEventListener("click",()=>changeQty(item.id,1));
+      btnDel?.addEventListener("click",()=>removeItem(item.id));
       els.cartItems.appendChild(row);
     }
     if (els.cartTotal) els.cartTotal.textContent=formatBRL(total);
