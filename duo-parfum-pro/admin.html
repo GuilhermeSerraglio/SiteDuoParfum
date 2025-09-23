@@ -17,6 +17,7 @@
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore-compat.js"></script>
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-storage-compat.js"></script>
+  <script defer src="./firebase-init.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -58,6 +59,19 @@
     const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
 
     document.addEventListener("DOMContentLoaded", () => {
+      const firebaseConfig = window.firebaseConfig || {
+        apiKey: "AIzaSyDVkpsr4z6LolEOkNTGcc9TmKeiu4-mi1Y",
+        authDomain: "duoparfum-61ec2.firebaseapp.com",
+        projectId: "duoparfum-61ec2",
+        storageBucket: "duoparfum-61ec2.firebasestorage.app",
+        messagingSenderId: "889684986920",
+        appId: "1:889684986920:web:9d452daf2192124b19391d"
+      };
+
+      if (!firebase.apps?.length) {
+        firebase.initializeApp(firebaseConfig);
+      }
+
       const auth = firebase.auth();
       const db = firebase.firestore();
       const storage = firebase.storage();
