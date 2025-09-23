@@ -62,16 +62,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (els.btnCheckout) {
     els.btnCheckout.onclick = ()=>{
       if(!state.cart.length){ alert("Seu carrinho está vazio."); return; }
+      resetCheckoutModal();
+      openDrawer(false);
       els.checkoutModal?.showModal();
     };
   }
   if (els.closeCheckout) els.closeCheckout.onclick = ()=> els.checkoutModal?.close();
+  if (els.checkoutModal) els.checkoutModal.addEventListener("close", ()=>{
+    resetCheckoutModal();
+    openDrawer(false);
+  });
 
   if (els.closeModal) els.closeModal.onclick = ()=> closeModal();
   if (els.ckConfirm) els.ckConfirm.onclick = confirmCheckout;
 
   /* ==== State ==== */
-  const state = window.__STATE = { products: [], cart: loadCart(), selected: null };
+  const state = window.__STATE = { products: [], cart: loadCart(), selected: null, processingCheckout:false };
 
   await loadProducts();
   renderProducts();
@@ -139,7 +145,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  function openDrawer(show){ els.cartDrawer?.classList.toggle("hidden", !show); }
+  function openDrawer(show){
+    if(!els.cartDrawer) return;
+    els.cartDrawer.classList.toggle("hidden", !show);
+    els.cartDrawer.setAttribute("aria-hidden", show?"false":"true");
+  }
   function openModal(p){
     state.selected=p;
     if (els.pmImg) els.pmImg.src=sanitizeImg(p.image);
@@ -203,12 +213,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   async function confirmCheckout(){
+    if(state.processingCheckout) return;
     const name=els.ckName?.value.trim();
     const cep=els.ckCep?.value.trim();
     const address=els.ckAddress?.value.trim();
     const payment=els.ckPayment?.value;
     if(!name||!cep||!address){ alert("Preencha todos os campos."); return; }
     if(!state.cart.length){ alert("Carrinho vazio."); return; }
+
+    setCheckoutProcessing(true);
+    if (els.paymentArea) els.paymentArea.innerHTML="<p class=\"muted\">Gerando pagamento...</p>";
 
     const total=state.cart.reduce((s,i)=>s+i.price*i.qty,0);
     const order={
@@ -223,10 +237,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     try{
       const ref=await db.collection("orders").add(order);
       orderId=ref.id;
-    }catch(e){ console.error(e); alert("Erro ao salvar pedido."); return; }
+    }catch(e){
+      console.error(e);
+      alert("Erro ao salvar pedido.");
+      setCheckoutProcessing(false);
+      return;
+    }
 
+    let success=false;
     try{
       const resp=await fetch("/api/payment",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId,order})});
+      if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data=await resp.json();
       if(data.error) throw new Error(data.error);
 
@@ -235,10 +256,47 @@ document.addEventListener("DOMContentLoaded", async () => {
       }else if(payment==="card"){
         els.paymentArea.innerHTML=`<a href="${data.link}" target="_blank" class="btn">Pagar com cartão</a>`;
       }
+      if (els.paymentArea) els.paymentArea.insertAdjacentHTML("beforeend","<p class=\"muted\" style=\"margin-top:12px\">Pedido registrado com sucesso. Utilize o pagamento acima para concluir sua compra.</p>");
+      state.cart=[];
+      saveCart(state.cart);
+      updateCartUI();
+      openDrawer(false);
+      markCheckoutCompleted();
+      success=true;
     }catch(e){
       console.error(e);
       alert("Erro ao gerar pagamento.");
+      if(orderId){
+        try{ await db.collection("orders").doc(orderId).delete(); }catch(err){ console.error("Falha ao remover pedido pendente:", err); }
+      }
+    }finally{
+      if(!success) setCheckoutProcessing(false);
     }
+  }
+
+  function setCheckoutProcessing(active){
+    state.processingCheckout=active;
+    if(els.ckConfirm){
+      els.ckConfirm.disabled=active;
+      els.ckConfirm.textContent=active?"Gerando...":"Gerar pagamento";
+    }
+  }
+
+  function markCheckoutCompleted(){
+    state.processingCheckout=false;
+    if(els.ckConfirm){
+      els.ckConfirm.disabled=true;
+      els.ckConfirm.textContent="Pagamento gerado";
+    }
+  }
+
+  function resetCheckoutModal(){
+    state.processingCheckout=false;
+    if(els.ckConfirm){
+      els.ckConfirm.disabled=false;
+      els.ckConfirm.textContent="Gerar pagamento";
+    }
+    if(els.paymentArea) els.paymentArea.innerHTML="";
   }
 
   /* ==== Helpers ==== */
