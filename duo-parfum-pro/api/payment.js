@@ -1,5 +1,70 @@
-// api/payment.js
-import { MercadoPagoConfig, Preference } from "mercadopago";
+const MP_API_BASE = "https://api.mercadopago.com";
+
+function parseBody(body) {
+  if (!body) return {};
+  if (typeof body === "string") {
+    try {
+      return JSON.parse(body);
+    } catch (err) {
+      console.error("Falha ao interpretar corpo da requisição:", err);
+      return {};
+    }
+  }
+  return body;
+}
+
+function buildItems(items = []) {
+  return items
+    .filter(Boolean)
+    .map((raw) => {
+      const qtyValue = Number(raw?.qty ?? 1);
+      const priceValue = Number(raw?.price ?? 0);
+      const qty = Number.isFinite(qtyValue) && qtyValue > 0 ? Math.floor(qtyValue) || 1 : 1;
+      const price = Number.isFinite(priceValue) && priceValue > 0 ? priceValue : 0;
+      const title = [raw?.name, raw?.ml].filter(Boolean).join(" ").trim() || "Produto Duo Parfum";
+      return {
+        title,
+        quantity: qty,
+        currency_id: "BRL",
+        unit_price: Math.round(price * 100) / 100
+      };
+    })
+    .filter((item) => item.unit_price > 0 && item.quantity > 0);
+}
+
+async function postToMercadoPago(path, token, payload) {
+  const fetchFn = typeof fetch === "function" ? fetch : null;
+  if (!fetchFn) {
+    throw new Error("Fetch API indisponível no ambiente de execução");
+  }
+
+  const response = await fetchFn(`${MP_API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (err) {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const message =
+      (data && (data.message || data.error)) || `Mercado Pago HTTP ${response.status}`;
+    const error = new Error(message);
+    error.details = data;
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -7,54 +72,89 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { orderId, order } = req.body;
+    const payload = parseBody(req.body);
+    const { orderId, order } = payload;
 
     if (!orderId || !order) {
       return res.status(400).json({ error: "Pedido inválido" });
     }
 
-    // Configura Mercado Pago com Access Token das variáveis de ambiente
-    const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
-
-    const items = order.items.map(i => ({
-      title: `${i.name} ${i.ml || ""}`,
-      quantity: i.qty,
-      currency_id: "BRL",
-      unit_price: i.price
-    }));
-
-    const preference = new Preference(client);
-
-    const pref = await preference.create({
-      body: {
-        items,
-        external_reference: orderId,
-        back_urls: {
-          success: "https://SEU-SITE.com/sucesso",
-          failure: "https://SEU-SITE.com/erro"
-        },
-        auto_return: "approved",
-        payment_methods: {
-          excluded_payment_types: order.customer.payment === "pix"
-            ? [{ id: "credit_card" }]
-            : [{ id: "ticket" }]
-        }
-      }
-    });
-
-    if (order.customer.payment === "pix") {
-      // Para PIX → QRCode + código copia e cola
-      return res.status(200).json({
-        qr: pref.response.point_of_interaction.transaction_data.qr_code_base64,
-        code: pref.response.point_of_interaction.transaction_data.qr_code
-      });
-    } else {
-      // Para Cartão → link de pagamento
-      return res.status(200).json({
-        link: pref.response.init_point
-      });
+    const token = process.env.MP_ACCESS_TOKEN;
+    if (!token) {
+      console.error("MP_ACCESS_TOKEN não configurado no ambiente");
+      return res.status(500).json({ error: "Configuração de pagamento ausente" });
     }
 
+    const items = buildItems(order.items);
+    if (!items.length) {
+      return res.status(400).json({ error: "Pedido sem itens" });
+    }
+
+    const total = Number(order.total ?? 0);
+    if (!Number.isFinite(total) || total <= 0) {
+      return res.status(400).json({ error: "Total inválido" });
+    }
+
+    const paymentType = order.customer?.payment || "pix";
+    const customerName = order.customer?.name?.trim() || "Cliente Duo Parfum";
+    const notificationUrl = process.env.MP_NOTIFICATION_URL;
+    const origin =
+      req.headers?.origin || process.env.SITE_URL || "https://site-duo-parfum.vercel.app";
+
+    if (paymentType === "pix") {
+      const pixPayload = {
+        transaction_amount: Math.round(total * 100) / 100,
+        description: `Pedido ${orderId}`,
+        payment_method_id: "pix",
+        payer: {
+          email: process.env.MP_PAYER_EMAIL || "pagador@duoparfum.com",
+          first_name: customerName
+        },
+        external_reference: orderId
+      };
+
+      if (notificationUrl) {
+        pixPayload.notification_url = notificationUrl;
+      }
+
+      const pix = await postToMercadoPago("/v1/payments", token, pixPayload);
+      const tx = pix?.point_of_interaction?.transaction_data;
+
+      if (!tx?.qr_code || !tx?.qr_code_base64) {
+        throw new Error("Resposta PIX inválida do Mercado Pago");
+      }
+
+      return res.status(200).json({ qr: tx.qr_code_base64, code: tx.qr_code });
+    }
+
+    const preferencePayload = {
+      items,
+      external_reference: orderId,
+      auto_return: "approved",
+      payment_methods: {
+        excluded_payment_types: [
+          { id: "ticket" },
+          { id: "atm" }
+        ]
+      },
+      back_urls: {
+        success: `${origin}/sucesso`,
+        failure: `${origin}/erro`
+      }
+    };
+
+    if (notificationUrl) {
+      preferencePayload.notification_url = notificationUrl;
+    }
+
+    const preference = await postToMercadoPago("/checkout/preferences", token, preferencePayload);
+    const link = preference.init_point || preference.sandbox_init_point;
+
+    if (!link) {
+      throw new Error("Link de pagamento não retornado pelo Mercado Pago");
+    }
+
+    return res.status(200).json({ link });
   } catch (err) {
     console.error("Erro Mercado Pago:", err);
     return res.status(500).json({ error: "Falha ao criar pagamento" });
