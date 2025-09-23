@@ -1,5 +1,5 @@
 /* ========= CONFIG FIREBASE ========= */
-const firebaseConfig = {
+const firebaseConfig = window.firebaseConfig || {
   apiKey: "AIzaSyDVkpsr4z6LolEOkNTGcc9TmKeiu4-mi1Y",
   authDomain: "duoparfum-61ec2.firebaseapp.com",
   projectId: "duoparfum-61ec2",
@@ -13,7 +13,7 @@ const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
 let app, db, auth;
 
 document.addEventListener("DOMContentLoaded", async () => {
-  app = firebase.initializeApp(firebaseConfig);
+  app = firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig);
   auth = firebase.auth();
   db = firebase.firestore();
 
