@@ -1,3 +1,6 @@
+const https = require("https");
+const { URL } = require("url");
+
 const MP_API_BASE = "https://api.mercadopago.com";
 
 function parseBody(body) {
@@ -33,40 +36,92 @@ function buildItems(items = []) {
 }
 
 async function postToMercadoPago(path, token, payload) {
-  const fetchFn = typeof fetch === "function" ? fetch : null;
-  if (!fetchFn) {
-    throw new Error("Fetch API indisponível no ambiente de execução");
+  const url = `${MP_API_BASE}${path}`;
+  const body = JSON.stringify(payload);
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json"
+  };
+
+  if (typeof fetch === "function") {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body
+    });
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (err) {
+      data = null;
+    }
+
+    if (!response.ok) {
+      const message =
+        (data && (data.message || data.error)) || `Mercado Pago HTTP ${response.status}`;
+      const error = new Error(message);
+      error.details = data;
+      error.status = response.status;
+      throw error;
+    }
+
+    return data;
   }
 
-  const response = await fetchFn(`${MP_API_BASE}${path}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
+  const { hostname, pathname, search } = new URL(url);
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname,
+        path: `${pathname}${search}`,
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Length": Buffer.byteLength(body)
+        }
+      },
+      (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          raw += chunk;
+        });
+        res.on("end", () => {
+          let data = null;
+          if (raw) {
+            try {
+              data = JSON.parse(raw);
+            } catch (err) {
+              if (res.statusCode >= 200 && res.statusCode < 300) {
+                return reject(new Error("Resposta inválida do Mercado Pago"));
+              }
+            }
+          }
+
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            const message =
+              (data && (data.message || data.error)) ||
+              `Mercado Pago HTTP ${res.statusCode}`;
+            const error = new Error(message);
+            error.details = data;
+            error.status = res.statusCode;
+            return reject(error);
+          }
+
+          resolve(data);
+        });
+      }
+    );
+
+    req.on("error", reject);
+    req.write(body);
+    req.end();
   });
-
-  let data = null;
-  try {
-    data = await response.json();
-  } catch (err) {
-    data = null;
-  }
-
-  if (!response.ok) {
-    const message =
-      (data && (data.message || data.error)) || `Mercado Pago HTTP ${response.status}`;
-    const error = new Error(message);
-    error.details = data;
-    error.status = response.status;
-    throw error;
-  }
-
-  return data;
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Método não permitido" });
   }
