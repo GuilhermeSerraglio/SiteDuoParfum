@@ -213,6 +213,23 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+.btn.ghost.is-current {
+  border-color: var(--brand-medium);
+  background: rgba(183, 132, 106, 0.16);
+  color: var(--brand-darker);
+}
+
+.btn.ghost.danger {
+  color: #b13838;
+  border-color: rgba(214, 69, 69, 0.4);
+}
+
+.btn.ghost.danger:hover,
+.btn.ghost.danger:focus-visible {
+  background: rgba(214, 69, 69, 0.12);
+  color: #8f2424;
+}
+
 #cartCount {
   background: rgba(255, 255, 255, 0.25);
   padding: 0.1rem 0.6rem;
@@ -421,6 +438,158 @@ button:disabled {
   gap: 22px;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   margin-top: 28px;
+}
+
+.orders-grid {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.order-card {
+  border-left: 6px solid rgba(140, 91, 77, 0.25);
+  position: relative;
+}
+
+.order-card__content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.order-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.order-card__title {
+  font-weight: 600;
+  font-size: 1.08rem;
+  color: var(--brand-darker);
+  margin-bottom: 4px;
+}
+
+.order-card__meta-line {
+  font-size: 0.86rem;
+  color: var(--brand-muted);
+}
+
+.order-card__status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 1rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(140, 91, 77, 0.12);
+  color: var(--brand-darker);
+  white-space: nowrap;
+}
+
+.order-card__details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  padding: 16px;
+  margin: -8px 0 0;
+  border-radius: 16px;
+  background: rgba(140, 91, 77, 0.06);
+}
+
+.order-card__label {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brand-muted);
+}
+
+.order-card__value {
+  font-weight: 600;
+  color: var(--brand-darker);
+}
+
+.order-card__items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.order-card__items ul {
+  list-style: disc;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+}
+
+.order-card__items li {
+  font-size: 0.92rem;
+  color: var(--brand-text);
+}
+
+.order-card__actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.order-card__actions-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.order-card__actions .btn {
+  white-space: nowrap;
+}
+
+.order-card__empty {
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 18px;
+  padding: 32px;
+  text-align: center;
+  width: 100%;
+  box-shadow: 0 12px 24px rgba(140, 91, 77, 0.08);
+}
+
+.order-card.is-paid {
+  border-left-color: #d4a017;
+  background: linear-gradient(140deg, rgba(255, 221, 118, 0.16), rgba(255, 249, 232, 0.85));
+}
+
+.order-card.is-sent {
+  border-left-color: #3b9d73;
+  background: linear-gradient(140deg, rgba(66, 174, 118, 0.16), rgba(233, 247, 242, 0.85));
+}
+
+.order-card.is-canceled {
+  border-left-color: #d64545;
+  background: linear-gradient(140deg, rgba(214, 69, 69, 0.14), rgba(253, 236, 234, 0.88));
+}
+
+.order-card__status-badge.is-paid {
+  background: rgba(255, 204, 0, 0.22);
+  color: #8a6d1f;
+}
+
+.order-card__status-badge.is-sent {
+  background: rgba(72, 175, 132, 0.22);
+  color: #2e7a53;
+}
+
+.order-card__status-badge.is-canceled {
+  background: rgba(214, 69, 69, 0.18);
+  color: #a93434;
+}
+
+.order-card__status-badge.is-pending {
+  background: rgba(140, 91, 77, 0.15);
+  color: var(--brand-darker);
 }
 
 .card {
@@ -718,6 +887,31 @@ hr {
 @media (max-width: 900px) {
   .hero {
     padding: 110px 0 90px;
+  }
+}
+
+@media (max-width: 720px) {
+  .order-card__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .order-card__status-badge {
+    margin-top: 8px;
+  }
+
+  .order-card__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .order-card__actions-group {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .order-card__actions-group .btn {
+    flex: 1 1 120px;
   }
 }
 
