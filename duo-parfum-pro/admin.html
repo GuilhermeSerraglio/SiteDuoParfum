@@ -51,7 +51,7 @@
     <!-- Pedidos -->
     <section>
       <h3>Pedidos</h3>
-      <div id="orderList" class="grid"></div>
+      <div id="orderList" class="grid orders-grid"></div>
     </section>
   </main>
 
@@ -89,6 +89,23 @@
         orderList: document.getElementById("orderList"),
         btnLogout: document.getElementById("btnLogout")
       };
+
+      const ORDER_STATUS = {
+        pending: { key: "pending", label: "Pendente", className: "is-pending" },
+        paid: { key: "paid", label: "Pago", className: "is-paid" },
+        sent: { key: "sent", label: "Enviado", className: "is-sent" },
+        canceled: { key: "canceled", label: "Cancelado", className: "is-canceled" }
+      };
+
+      const formatCurrency = (value) => {
+        const amount = Number(value) || 0;
+        return amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+      };
+
+      function getOrderStatusInfo(status) {
+        const normalized = (status || "pending").toString().toLowerCase();
+        return ORDER_STATUS[normalized] || ORDER_STATUS.pending;
+      }
 
       async function callProductsApi(method, payload = {}) {
         const user = auth.currentUser;
@@ -262,35 +279,112 @@
 
       /* ==== Pedidos ==== */
       async function loadOrders() {
-        const snap = await db.collection("orders").orderBy("createdAt","desc").get();
+        const snap = await db.collection("orders").orderBy("createdAt", "desc").get();
         els.orderList.innerHTML = "";
+
+        if (snap.empty) {
+          els.orderList.innerHTML = '<div class="order-card__empty muted">Nenhum pedido registrado até o momento.</div>';
+          return;
+        }
+
         snap.forEach(doc => {
-          const d = doc.data();
+          const data = doc.data();
+          const statusInfo = getOrderStatusInfo(data.status);
           const card = document.createElement("div");
-          card.className = "card";
-          const items = d.items.map(i => `${i.qty}x ${i.name} ${i.ml||""}`).join("<br>");
+          card.className = `card order-card ${statusInfo.className}`;
+
+          const items = Array.isArray(data.items) ? data.items : [];
+          const itemsList = items
+            .map(item => {
+              const quantity = item?.qty || 1;
+              const name = item?.name || "Item";
+              const ml = item?.ml ? ` (${item.ml})` : "";
+              return `<li>${quantity}x ${name}${ml}</li>`;
+            })
+            .join("");
+
+          const contactLine = [data.customer?.email, data.customer?.phone].filter(Boolean).join(" · ");
+          const addressLine = [data.customer?.cep, data.customer?.address, data.customer?.city, data.customer?.state]
+            .filter(Boolean)
+            .join(" · ");
+          const createdAt = typeof data.createdAt?.toDate === "function" ? data.createdAt.toDate() : null;
+          const createdAtLine = createdAt ? `Realizado em ${createdAt.toLocaleString("pt-BR")}` : "";
+          const metaLines = [contactLine, addressLine, createdAtLine]
+            .filter(Boolean)
+            .map(line => `<p class="order-card__meta-line">${line}</p>`)
+            .join("");
+
+          const statusButtons = [
+            { value: "paid", label: "Pago" },
+            { value: "sent", label: "Enviado" },
+            { value: "canceled", label: "Cancelado" }
+          ];
+
+          const actionsHtml = statusButtons
+            .map(button => {
+              const isCurrent = button.value === statusInfo.key;
+              const activeClass = isCurrent ? " is-current" : "";
+              return `<button class="btn small ghost${activeClass}" onclick="updateOrder('${doc.id}','${button.value}')">${button.label}</button>`;
+            })
+            .join("");
+
           card.innerHTML = `
-            <div class="pad">
-              <div><strong>Cliente:</strong> ${d.customer?.name || ""}</div>
-              <div><strong>E-mail:</strong> ${d.customer?.email || ""}</div>
-              <div><strong>Endereço:</strong> ${d.customer?.cep || ""}, ${d.customer?.address || ""}</div>
-              <div><strong>Pagamento:</strong> ${d.customer?.payment || ""}</div>
-              <div><strong>Itens:</strong><br>${items}</div>
-              <div><strong>Total:</strong> ${(d.total||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}</div>
-              <div><strong>Status:</strong> ${d.status}</div>
-              <div class="row gap" style="margin-top:8px">
-                <button class="btn small" onclick="updateOrder('${doc.id}','paid')">Pago</button>
-                <button class="btn small" onclick="updateOrder('${doc.id}','sent')">Enviado</button>
-                <button class="btn small" onclick="updateOrder('${doc.id}','canceled')">Cancelado</button>
+            <div class="pad order-card__content">
+              <div class="order-card__header">
+                <div>
+                  <p class="order-card__title">${data.customer?.name || "Cliente"}</p>
+                  ${metaLines}
+                </div>
+                <span class="order-card__status-badge ${statusInfo.className}">${statusInfo.label}</span>
+              </div>
+              <div class="order-card__details">
+                <div>
+                  <span class="order-card__label">Pagamento</span>
+                  <span class="order-card__value">${data.customer?.payment || "Não informado"}</span>
+                </div>
+                <div>
+                  <span class="order-card__label">Total</span>
+                  <span class="order-card__value">${formatCurrency(data.total)}</span>
+                </div>
+              </div>
+              <div class="order-card__items">
+                <span class="order-card__label">Itens</span>
+                <ul>${itemsList || "<li class='muted'>Nenhum item registrado.</li>"}</ul>
+              </div>
+              <div class="order-card__actions">
+                <button class="btn small ghost danger" onclick="deleteOrder('${doc.id}')">Excluir</button>
+                <div class="order-card__actions-group">
+                  ${actionsHtml}
+                </div>
               </div>
             </div>`;
+
           els.orderList.appendChild(card);
         });
       }
 
       window.updateOrder = async (id, status) => {
-        await db.collection("orders").doc(id).update({ status });
-        loadOrders();
+        try {
+          await db.collection("orders").doc(id).update({ status });
+          loadOrders();
+        } catch (err) {
+          console.error("Erro ao atualizar pedido:", err);
+          alert("Não foi possível atualizar o status do pedido.");
+        }
+      };
+
+      window.deleteOrder = async (id) => {
+        if (!confirm("Excluir este pedido? Essa ação não poderá ser desfeita.")) {
+          return;
+        }
+
+        try {
+          await db.collection("orders").doc(id).delete();
+          loadOrders();
+        } catch (err) {
+          console.error("Erro ao excluir pedido:", err);
+          alert("Não foi possível excluir o pedido.");
+        }
       };
 
       loadOrders();
