@@ -90,6 +90,74 @@
         btnLogout: document.getElementById("btnLogout")
       };
 
+      async function callProductsApi(method, payload = {}) {
+        const user = auth.currentUser;
+        if (!user) {
+          const error = new Error("Usuário não autenticado");
+          error.displayed = true;
+          alert("Faça login novamente para continuar.");
+          throw error;
+        }
+
+        let token;
+        try {
+          token = await user.getIdToken();
+        } catch (err) {
+          console.error("Erro ao obter token de autenticação:", err);
+          const error = new Error("Falha ao obter token de autenticação");
+          error.displayed = true;
+          alert("Não foi possível confirmar sua autenticação. Faça login novamente.");
+          throw error;
+        }
+
+        const options = {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        };
+
+        if (method !== "GET" && method !== "HEAD") {
+          options.headers["Content-Type"] = "application/json";
+          options.body = JSON.stringify(payload || {});
+        }
+
+        try {
+          const response = await fetch("/api/products", options);
+          const text = await response.text();
+          let data = null;
+
+          if (text) {
+            try {
+              data = JSON.parse(text);
+            } catch (err) {
+              console.warn("Resposta da API de produtos não está em JSON válido:", err);
+            }
+          }
+
+          if (!response.ok) {
+            let message = (data && data.error) || "Erro ao processar a solicitação.";
+            if (response.status === 401 || response.status === 403) {
+              message = "Acesso negado. Somente administradores autorizados podem realizar esta ação.";
+            }
+            alert(message);
+            const error = new Error(message);
+            error.status = response.status;
+            error.displayed = true;
+            error.details = data;
+            throw error;
+          }
+
+          return data;
+        } catch (err) {
+          if (!err?.displayed) {
+            alert("Não foi possível comunicar com o servidor. Tente novamente.");
+            err.displayed = true;
+          }
+          throw err;
+        }
+      }
+
       /* ==== Proteção de acesso ==== */
       auth.onAuthStateChanged(user => {
         if (!user || !ADMIN_EMAILS.includes(user.email)) {
@@ -120,9 +188,7 @@
             url = await ref.getDownloadURL();
           }
 
-          const timestamp = firebase.firestore.FieldValue.serverTimestamp();
-
-          await db.collection("products").add({
+          await callProductsApi("POST", {
             name: els.pName.value,
             brand: els.pBrand.value,
             ml: els.pMl.value,
@@ -130,16 +196,16 @@
             notes: els.pNotes.value,
             category: els.pCategory.value,
             image: url,
-            stock: 0,
-            featured: false,
-            createdAt: timestamp
+            featured: false
           });
 
           els.form.reset();
           loadProducts();
         } catch (err) {
           console.error("Erro ao salvar produto:", err);
-          alert("Erro ao salvar produto.");
+          if (!err?.displayed) {
+            alert("Erro ao salvar produto.");
+          }
         }
       };
 
@@ -168,18 +234,27 @@
       }
 
       window.updateStock = async (id, delta) => {
-        const ref = db.collection("products").doc(id);
-        const snap = await ref.get();
-        if (!snap.exists) return;
-        const stock = (snap.data().stock || 0) + delta;
-        await ref.update({ stock: Math.max(stock,0) });
-        loadProducts();
+        try {
+          await callProductsApi("PATCH", { id, delta });
+          loadProducts();
+        } catch (err) {
+          console.error("Erro ao atualizar estoque:", err);
+          if (!err?.displayed) {
+            alert("Erro ao atualizar estoque.");
+          }
+        }
       };
 
       window.deleteProduct = async (id) => {
-        if (confirm("Excluir produto?")) {
-          await db.collection("products").doc(id).delete();
+        if (!confirm("Excluir produto?")) return;
+        try {
+          await callProductsApi("DELETE", { id });
           loadProducts();
+        } catch (err) {
+          console.error("Erro ao excluir produto:", err);
+          if (!err?.displayed) {
+            alert("Erro ao excluir produto.");
+          }
         }
       };
 
