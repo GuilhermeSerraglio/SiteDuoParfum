@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Duo Parfum — Perfumes e Decants</title>
   <link rel="stylesheet" href="./style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Poppins:wght@300;400;500;600&display=swap"
+    rel="stylesheet"
+  />
 
   <!-- Firebase -->
   <script defer src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
@@ -23,7 +29,7 @@
         <span class="brand-name">Duo Parfum</span>
       </a>
       <nav class="row gap">
-        <a href="#catalogo">Catálogo</a>
+        <a class="nav-link" href="#catalogo">Catálogo</a>
         <button id="btnLogin" class="btn ghost">Entrar</button>
         <button id="btnLogout" class="btn ghost hidden">Sair</button>
         <a id="linkAdmin" href="/admin.html" class="btn ghost hidden">Admin</a>
@@ -35,35 +41,70 @@
   <!-- Hero -->
   <section class="hero" id="home">
     <div class="container">
-      <h1>Perfumes que contam sua história</h1>
-      <p class="muted">Importados originais e decants — experiências olfativas do clique à entrega.</p>
-      <a href="#catalogo" class="btn">Ver catálogo</a>
+      <div class="hero-content">
+        <span class="hero-badge">Elegância em cada nota</span>
+        <h1>Perfumes que contam sua história</h1>
+        <p class="hero-subtitle">Importados originais e decants — experiências olfativas do clique à entrega.</p>
+        <div class="hero-actions">
+          <a href="#catalogo" class="btn">Explorar catálogo</a>
+          <a href="#catalogo" class="btn ghost">Conheça os destaques</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="features">
+    <div class="container feature-grid">
+      <article class="feature-card">
+        <span class="feature-icon">🌸</span>
+        <h3>Curadoria premium</h3>
+        <p>Selecionamos fragrâncias icônicas e lançamentos exclusivos para colecionadores e apaixonados por perfume.</p>
+      </article>
+      <article class="feature-card">
+        <span class="feature-icon">🎁</span>
+        <h3>Decants sob medida</h3>
+        <p>Experimente novos aromas com decants preparados com cuidado e frascos sofisticados para presentear.</p>
+      </article>
+      <article class="feature-card">
+        <span class="feature-icon">🚚</span>
+        <h3>Envio rápido e seguro</h3>
+        <p>Embalagens protegidas, rastreio completo e suporte próximo em cada etapa da sua compra.</p>
+      </article>
     </div>
   </section>
 
   <!-- Catálogo -->
-  <section id="catalogo" class="container" style="padding:24px 0">
-    <div class="filters row wrap gap">
-      <input id="q" class="input" placeholder="Busque por nome, marca ou nota" />
-      <select id="filterCategory" class="input">
-        <option value="">Todas as categorias</option>
-        <option>Decant</option>
-        <option>Importado</option>
-        <option>Nacional</option>
-        <option>Tester</option>
-      </select>
-      <select id="filterSort" class="input">
-        <option value="featured">Destaques</option>
-        <option value="newest">Mais novos</option>
-        <option value="price_asc">Menor preço</option>
-        <option value="price_desc">Maior preço</option>
-      </select>
-      <button id="btnSearch" class="btn">Buscar</button>
-      <button id="btnClearFilters" class="btn ghost">Limpar</button>
-    </div>
+  <section id="catalogo" class="catalogo">
+    <div class="container">
+      <header class="section-head">
+        <span class="section-eyebrow">Catálogo Duo Parfum</span>
+        <h2>Descubra sua próxima assinatura olfativa</h2>
+        <p>Importados originais, decants exclusivos e testers selecionados para todas as ocasiões.</p>
+      </header>
 
-    <div id="emptyState" class="muted hidden" style="margin-top:10px">Nenhum produto encontrado.</div>
-    <div id="grid" class="grid" style="margin-top:12px"></div>
+      <div class="filters row wrap gap">
+        <input id="q" class="input" placeholder="Busque por nome, marca ou nota" />
+        <select id="filterCategory" class="input">
+          <option value="">Todas as categorias</option>
+          <option>Decant</option>
+          <option>Importado</option>
+          <option>Nacional</option>
+          <option>Tester</option>
+        </select>
+        <select id="filterSort" class="input">
+          <option value="featured">Destaques</option>
+          <option value="newest">Mais novos</option>
+          <option value="price_asc">Menor preço</option>
+          <option value="price_desc">Maior preço</option>
+        </select>
+        <button id="btnSearch" class="btn">Buscar</button>
+        <button id="btnClearFilters" class="btn ghost">Limpar</button>
+      </div>
+
+      <div id="emptyState" class="muted hidden">Nenhum produto encontrado.</div>
+      <div id="grid" class="grid"></div>
+    </div>
   </section>
 
   <!-- Carrinho -->
@@ -133,8 +174,22 @@
 
   <!-- Footer -->
   <footer class="footer">
-    <div class="container row between wrap">
-      <span>© <span id="year"></span> Duo Parfum</span>
+    <div class="container footer-grid">
+      <div class="footer-brand">
+        <img class="footer-logo" src="./assets/logo.jpg" alt="Duo Parfum" />
+        <p>Perfumes originais, decants exclusivos e atendimento personalizado para quem ama fragrâncias.</p>
+      </div>
+      <div class="footer-links">
+        <span class="footer-eyebrow">Conecte-se</span>
+        <a href="https://www.instagram.com" target="_blank" rel="noreferrer">Instagram</a>
+        <a href="https://www.facebook.com" target="_blank" rel="noreferrer">Facebook</a>
+        <a href="mailto:contato@duoparfum.com">contato@duoparfum.com</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <div class="container row between center">
+        <span>© <span id="year"></span> Duo Parfum. Todos os direitos reservados.</span>
+      </div>
     </div>
   </footer>
 </body>
