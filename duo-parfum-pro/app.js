@@ -22,7 +22,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     "btnCart","cartDrawer","closeCart","cartItems","cartTotal","cartCount","btnCheckout",
     "btnLogin","btnLogout","linkAdmin",
     "productModal","pmImg","pmName","pmBrand","pmNotes","pmPrice","pmMl","pmAdd","pmFav","closeModal",
-    "checkoutModal","closeCheckout","ckName","ckCep","ckAddress","ckPayment","ckConfirm","paymentArea","year"
+    "checkoutModal","closeCheckout","ckName","ckEmail","ckCep","ckAddress","ckPayment","ckConfirm","paymentArea","year"
   ]);
 
   if (els.year) els.year.textContent = new Date().getFullYear();
@@ -214,11 +214,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function confirmCheckout(){
     if(state.processingCheckout) return;
-    const name=els.ckName?.value.trim();
-    const cep=els.ckCep?.value.trim();
-    const address=els.ckAddress?.value.trim();
+    const name=(els.ckName?.value||"").trim();
+    const email=(els.ckEmail?.value||"").trim().toLowerCase();
+    const cep=(els.ckCep?.value||"").trim();
+    const address=(els.ckAddress?.value||"").trim();
     const payment=els.ckPayment?.value;
-    if(!name||!cep||!address){ alert("Preencha todos os campos."); return; }
+    if(!name||!email||!cep||!address){ alert("Preencha todos os campos."); return; }
+    if(!isValidEmail(email)){ alert("Informe um e-mail válido."); return; }
     if(!state.cart.length){ alert("Carrinho vazio."); return; }
 
     setCheckoutProcessing(true);
@@ -230,7 +232,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       total,
       createdAt:new Date(),
       status:"pending",
-      customer:{name,cep,address,payment}
+      customer:{name,email,cep,address,payment}
     };
 
     let orderId="";
@@ -252,9 +254,23 @@ document.addEventListener("DOMContentLoaded", async () => {
       if(data.error) throw new Error(data.error);
 
       if(payment==="pix"){
-        els.paymentArea.innerHTML=`<p>Escaneie o QRCode para pagar:</p><img src="data:image/png;base64,${data.qr}" style="max-width:200px"><p>Código Copia e Cola:</p><textarea readonly style="width:100%">${data.code}</textarea>`;
+        if(els.paymentArea){
+          const pixParts=["<p>Escaneie o QRCode para pagar:</p>"];
+          if(data.qr){
+            pixParts.push(`<img src="data:image/png;base64,${data.qr}" style="max-width:200px">`);
+          }else{
+            pixParts.push("<p class=\"muted\">QRCode indisponível. Utilize o código abaixo para concluir o pagamento.</p>");
+          }
+          if(data.code){
+            pixParts.push("<p>Código Copia e Cola:</p>");
+            pixParts.push(`<textarea readonly style="width:100%">${escapeHtml(data.code)}</textarea>`);
+          }else{
+            pixParts.push("<p class=\"muted\">Código PIX não retornado. Entre em contato com o atendimento.</p>");
+          }
+          els.paymentArea.innerHTML=pixParts.join("\n");
+        }
       }else if(payment==="card"){
-        els.paymentArea.innerHTML=`<a href="${data.link}" target="_blank" class="btn">Pagar com cartão</a>`;
+        if(els.paymentArea) els.paymentArea.innerHTML=`<a href="${data.link}" target="_blank" class="btn">Pagar com cartão</a>`;
       }
       if (els.paymentArea) els.paymentArea.insertAdjacentHTML("beforeend","<p class=\"muted\" style=\"margin-top:12px\">Pedido registrado com sucesso. Utilize o pagamento acima para concluir sua compra.</p>");
       state.cart=[];
@@ -306,5 +322,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   function saveCart(v){localStorage.setItem("cart",JSON.stringify(v));}
   function formatBRL(n){return n?.toLocaleString?.("pt-BR",{style:"currency",currency:"BRL"})??"R$ 0,00";}
   function sanitizeImg(src){return src||"https://picsum.photos/seed/duoparfum/600/400";}
+  function isValidEmail(email=""){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);}
   function escapeHtml(s=""){return s.replace(/[&<>\"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
 });

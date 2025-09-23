@@ -32,7 +32,31 @@ function buildItems(items = []) {
     .filter((item) => item.unit_price > 0 && item.quantity > 0);
 }
 
-async function postToMercadoPago(path, token, payload) {
+function sanitizeEmail(email) {
+  return typeof email === "string" ? email.trim().toLowerCase() : "";
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function buildFallbackEmail(orderId) {
+  const base = String(orderId || Date.now()).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const slug = base ? base.slice(0, 16) : String(Date.now());
+  return `pagador+${slug}@duoparfum.com`;
+}
+
+function splitName(name) {
+  const parts = typeof name === "string" ? name.trim().split(/\s+/).filter(Boolean) : [];
+  if (!parts.length) {
+    return { firstName: "Cliente", lastName: "Duo Parfum" };
+  }
+  const firstName = parts.shift();
+  const lastName = parts.join(" ") || "Duo Parfum";
+  return { firstName, lastName };
+}
+
+async function postToMercadoPago(path, token, payload, extraHeaders = {}) {
   const fetchFn = typeof fetch === "function" ? fetch : null;
   if (!fetchFn) {
     throw new Error("Fetch API indisponível no ambiente de execução");
@@ -42,7 +66,8 @@ async function postToMercadoPago(path, token, payload) {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...extraHeaders
     },
     body: JSON.stringify(payload)
   });
@@ -95,8 +120,16 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Total inválido" });
     }
 
-    const paymentType = order.customer?.payment || "pix";
-    const customerName = order.customer?.name?.trim() || "Cliente Duo Parfum";
+    const paymentType = String(order.customer?.payment || "pix").toLowerCase();
+    const rawName = typeof order.customer?.name === "string" ? order.customer.name : "";
+    const customerName = rawName.trim() || "Cliente Duo Parfum";
+    const { firstName, lastName } = splitName(customerName);
+    const requestedEmail = sanitizeEmail(order.customer?.email);
+    const configuredEmail = sanitizeEmail(process.env.MP_PAYER_EMAIL);
+    const fallbackEmail = isValidEmail(configuredEmail)
+      ? configuredEmail
+      : buildFallbackEmail(orderId);
+    const customerEmail = isValidEmail(requestedEmail) ? requestedEmail : fallbackEmail;
     const notificationUrl = process.env.MP_NOTIFICATION_URL;
     const origin =
       req.headers?.origin || process.env.SITE_URL || "https://site-duo-parfum.vercel.app";
@@ -107,17 +140,32 @@ export default async function handler(req, res) {
         description: `Pedido ${orderId}`,
         payment_method_id: "pix",
         payer: {
-          email: process.env.MP_PAYER_EMAIL || "pagador@duoparfum.com",
-          first_name: customerName
+          email: customerEmail,
+          first_name: firstName,
+          last_name: lastName
         },
-        external_reference: orderId
+        external_reference: orderId,
+        binary_mode: true,
+        metadata: { orderId }
       };
+
+      if (items.length) {
+        pixPayload.additional_info = {
+          items: items.map((item) => ({
+            title: item.title,
+            quantity: item.quantity,
+            unit_price: item.unit_price
+          }))
+        };
+      }
 
       if (notificationUrl) {
         pixPayload.notification_url = notificationUrl;
       }
 
-      const pix = await postToMercadoPago("/v1/payments", token, pixPayload);
+      const pix = await postToMercadoPago("/v1/payments", token, pixPayload, {
+        "X-Idempotency-Key": orderId
+      });
       const tx = pix?.point_of_interaction?.transaction_data;
 
       if (!tx?.qr_code || !tx?.qr_code_base64) {
@@ -131,6 +179,12 @@ export default async function handler(req, res) {
       items,
       external_reference: orderId,
       auto_return: "approved",
+      binary_mode: true,
+      metadata: { orderId },
+      payer: {
+        name: customerName,
+        email: customerEmail
+      },
       payment_methods: {
         excluded_payment_types: [
           { id: "ticket" },

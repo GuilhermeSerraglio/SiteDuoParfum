@@ -175,6 +175,7 @@
           card.innerHTML = `
             <div class="pad">
               <div><strong>Cliente:</strong> ${d.customer?.name || ""}</div>
+              <div><strong>E-mail:</strong> ${d.customer?.email || ""}</div>
               <div><strong>Endereço:</strong> ${d.customer?.cep || ""}, ${d.customer?.address || ""}</div>
               <div><strong>Pagamento:</strong> ${d.customer?.payment || ""}</div>
               <div><strong>Itens:</strong><br>${items}</div>
