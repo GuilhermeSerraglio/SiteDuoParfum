@@ -31,6 +31,7 @@
       </a>
       <nav class="row gap">
         <a class="nav-link" href="#catalogo">Catálogo</a>
+        <a id="linkOrders" class="nav-link hidden" href="#meusPedidos">Meus pedidos</a>
         <button id="btnLogin" class="btn ghost">Entrar</button>
         <button id="btnLogout" class="btn ghost hidden">Sair</button>
         <a id="linkAdmin" href="/admin.html" class="btn ghost hidden">Admin</a>
@@ -105,6 +106,27 @@
 
       <div id="emptyState" class="muted hidden">Nenhum produto encontrado.</div>
       <div id="grid" class="grid"></div>
+    </div>
+  </section>
+
+  <!-- Meus pedidos -->
+  <section id="meusPedidos" class="orders-section">
+    <div class="container">
+      <header class="section-head">
+        <span class="section-eyebrow">Acompanhe seu pedido</span>
+        <h2>Meus pedidos</h2>
+        <p>Veja o status do pagamento, envio e o rastreio integrado aos Correios.</p>
+      </header>
+
+      <div id="ordersGuest" class="orders-guest">
+        <h3>Faça login para acompanhar seus pedidos</h3>
+        <p class="muted">Use o botão "Entrar" no topo da página para visualizar seus pedidos e acompanhar o envio.</p>
+      </div>
+
+      <div id="ordersError" class="orders-error hidden"></div>
+      <div id="ordersLoading" class="muted hidden">Carregando seus pedidos...</div>
+      <div id="ordersEmpty" class="muted hidden">Você ainda não possui pedidos registrados.</div>
+      <div id="ordersList" class="grid orders-grid hidden"></div>
     </div>
   </section>
 
