@@ -157,42 +157,110 @@ module.exports = async function handler(req, res) {
 
   if (req.method === "PATCH") {
     const id = sanitizeString(payload.id);
-    const deltaValue = Number(payload.delta);
 
     if (!id) {
       return res.status(400).json({ error: "ID do produto é obrigatório" });
     }
 
-    if (!Number.isFinite(deltaValue)) {
-      return res.status(400).json({ error: "Variação de estoque inválida" });
+    const hasDelta = Object.prototype.hasOwnProperty.call(payload, "delta");
+
+    if (hasDelta) {
+      const deltaValue = Number(payload.delta);
+      if (!Number.isFinite(deltaValue)) {
+        return res.status(400).json({ error: "Variação de estoque inválida" });
+      }
+
+      const ref = db.collection("products").doc(id);
+
+      try {
+        let newStock = 0;
+        await db.runTransaction(async (transaction) => {
+          const snap = await transaction.get(ref);
+          if (!snap.exists) {
+            const error = new Error("Produto não encontrado");
+            error.status = 404;
+            throw error;
+          }
+          const currentStock = Number(snap.data()?.stock) || 0;
+          newStock = Math.max(currentStock + deltaValue, 0);
+          transaction.update(ref, {
+            stock: newStock,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedBy: user.email,
+          });
+        });
+        return res.status(200).json({ id, stock: newStock });
+      } catch (err) {
+        if (err.status === 404) {
+          return res.status(404).json({ error: err.message });
+        }
+        console.error("Erro ao atualizar estoque:", err);
+        return res.status(500).json({ error: "Falha ao atualizar estoque" });
+      }
     }
 
     const ref = db.collection("products").doc(id);
+    const updates = {};
+
+    if (Object.prototype.hasOwnProperty.call(payload, "name")) {
+      const name = sanitizeString(payload.name);
+      if (!name) {
+        return res.status(400).json({ error: "Nome do produto é obrigatório" });
+      }
+      updates.name = name;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "brand")) {
+      updates.brand = sanitizeString(payload.brand);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "ml")) {
+      updates.ml = sanitizeString(payload.ml);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "notes")) {
+      updates.notes = sanitizeString(payload.notes);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "category")) {
+      updates.category = sanitizeString(payload.category);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "image")) {
+      updates.image = sanitizeString(payload.image);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "featured")) {
+      updates.featured = Boolean(payload.featured);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "price")) {
+      const priceValue = Number(payload.price);
+      if (!Number.isFinite(priceValue) || priceValue < 0) {
+        return res.status(400).json({ error: "Preço inválido" });
+      }
+      updates.price = Math.round(priceValue * 100) / 100;
+    }
+
+    const fieldsToUpdate = Object.keys(updates);
+    if (!fieldsToUpdate.length) {
+      return res.status(400).json({ error: "Nenhum dado para atualizar" });
+    }
+
+    updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    updates.updatedBy = user.email;
 
     try {
-      let newStock = 0;
-      await db.runTransaction(async (transaction) => {
-        const snap = await transaction.get(ref);
-        if (!snap.exists) {
-          const error = new Error("Produto não encontrado");
-          error.status = 404;
-          throw error;
-        }
-        const currentStock = Number(snap.data()?.stock) || 0;
-        newStock = Math.max(currentStock + deltaValue, 0);
-        transaction.update(ref, {
-          stock: newStock,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedBy: user.email,
-        });
-      });
-      return res.status(200).json({ id, stock: newStock });
-    } catch (err) {
-      if (err.status === 404) {
-        return res.status(404).json({ error: err.message });
+      const snap = await ref.get();
+      if (!snap.exists) {
+        return res.status(404).json({ error: "Produto não encontrado" });
       }
-      console.error("Erro ao atualizar estoque:", err);
-      return res.status(500).json({ error: "Falha ao atualizar estoque" });
+
+      await ref.update(updates);
+      return res.status(200).json({ id, updated: true });
+    } catch (err) {
+      console.error("Erro ao atualizar produto:", err);
+      return res.status(500).json({ error: "Falha ao atualizar produto" });
     }
   }
 
