@@ -8,6 +8,12 @@ const firebaseConfig = window.firebaseConfig || {
   appId: "1:889684986920:web:9d452daf2192124b19391d"
 };
 const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
+const ORDER_STATUS = {
+  pending: { key: "pending", label: "Pendente", className: "is-pending", description: "Aguardando confirmação de pagamento" },
+  paid: { key: "paid", label: "Pago", className: "is-paid", description: "Pagamento confirmado" },
+  sent: { key: "sent", label: "Enviado", className: "is-sent", description: "Pedido enviado para entrega" },
+  canceled: { key: "canceled", label: "Cancelado", className: "is-canceled", description: "Pedido cancelado" }
+};
 /* =================================== */
 
 let app, db, auth;
@@ -20,7 +26,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const els = mapIds([
     "grid","emptyState","q","btnSearch","filterCategory","filterSort","btnClearFilters",
     "btnCart","cartDrawer","closeCart","cartItems","cartTotal","cartCount","btnCheckout",
-    "btnLogin","btnLogout","linkAdmin",
+    "btnLogin","btnLogout","linkAdmin","linkOrders","ordersSection","ordersList","ordersEmpty","ordersLoading","ordersGuest","ordersError",
     "productModal","pmImg","pmName","pmBrand","pmNotes","pmPrice","pmMl","pmAdd","pmFav","closeModal",
     "checkoutModal","closeCheckout","ckName","ckEmail","ckCep","ckAddress","ckPayment","ckConfirm","paymentArea","year"
   ]);
@@ -33,6 +39,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (els.btnLogin) toggle(els.btnLogin, logged);
     if (els.btnLogout) toggle(els.btnLogout, !logged);
     if (els.linkAdmin) toggle(els.linkAdmin, !(logged && ADMIN_EMAILS.includes(user?.email)));
+    if (els.linkOrders) toggle(els.linkOrders, !logged);
+
+    if (!logged) {
+      cleanupOrderListeners();
+      state.orders = [];
+      state.orderTracking = {};
+      state.ordersError = "";
+      state.ordersLoading = false;
+    }
+
+    renderOrders();
+
+    if (logged) {
+      loadUserOrders(user);
+    }
   });
 
   if (els.btnLogin) {
@@ -75,13 +96,39 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (els.closeModal) els.closeModal.onclick = ()=> closeModal();
   if (els.ckConfirm) els.ckConfirm.onclick = confirmCheckout;
+  if (els.ordersList) {
+    els.ordersList.addEventListener("click", ev => {
+      const btn = ev.target?.closest?.("[data-refresh-tracking]");
+      if (!btn) return;
+      const orderId = btn.getAttribute("data-refresh-tracking");
+      if (!orderId) return;
+      const order = state.orders.find(o => o.id === orderId);
+      if (!order || !order.trackingCode) return;
+      requestTracking(order, true);
+    });
+  }
 
   /* ==== State ==== */
-  const state = window.__STATE = { products: [], cart: loadCart(), selected: null, processingCheckout:false };
+  const state = window.__STATE = {
+    products: [],
+    cart: loadCart(),
+    selected: null,
+    processingCheckout: false,
+    orders: [],
+    orderTracking: {},
+    ordersLoading: false,
+    ordersError: ""
+  };
+
+  let orderUnsubscribes = [];
+  let orderDocSources = new Map();
+  let orderDocs = new Map();
+  let orderPendingKeys = new Set();
 
   await loadProducts();
   renderProducts();
   updateCartUI();
+  renderOrders();
 
   /* ==== Funções ==== */
   async function loadProducts(){
@@ -228,6 +275,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const total=state.cart.reduce((s,i)=>s+i.price*i.qty,0);
     const order={
+      userId: auth.currentUser?.uid || null,
       items: state.cart.map(i=>({id:i.id,name:i.name,ml:i.ml||"",price:i.price,qty:i.qty})),
       total,
       createdAt:new Date(),
@@ -315,13 +363,437 @@ document.addEventListener("DOMContentLoaded", async () => {
     if(els.paymentArea) els.paymentArea.innerHTML="";
   }
 
+  /* ==== Pedidos ==== */
+  function cleanupOrderListeners(){
+    if (orderUnsubscribes.length){
+      orderUnsubscribes.forEach(unsub=>{
+        try{ unsub?.(); }catch(err){ console.warn("Falha ao remover listener de pedidos:", err); }
+      });
+    }
+    orderUnsubscribes=[];
+    orderDocSources=new Map();
+    orderDocs=new Map();
+    orderPendingKeys=new Set();
+  }
+
+  function loadUserOrders(user){
+    cleanupOrderListeners();
+
+    state.orders=[];
+    state.ordersLoading=true;
+    state.ordersError="";
+    state.orderTracking={};
+    orderDocs=new Map();
+    orderDocSources=new Map();
+    renderOrders();
+
+    if(!user){
+      state.ordersLoading=false;
+      renderOrders();
+      return;
+    }
+
+    const email=(user.email||"").trim().toLowerCase();
+    const queries=[];
+    if(user.uid){
+      queries.push({key:`uid:${user.uid}`,query:db.collection("orders").where("userId","==",user.uid)});
+    }
+    if(email){
+      queries.push({key:`email:${email}`,query:db.collection("orders").where("customer.email","==",email)});
+    }
+
+    if(!queries.length){
+      state.ordersLoading=false;
+      renderOrders();
+      return;
+    }
+
+    orderPendingKeys=new Set(queries.map(q=>q.key));
+
+    queries.forEach(({key,query})=>{
+      const unsub=query.onSnapshot(snapshot=>{
+        orderPendingKeys.delete(key);
+
+        snapshot.docChanges().forEach(change=>{
+          const docId=change.doc.id;
+          if(change.type==="removed"){
+            const sources=orderDocSources.get(docId);
+            if(sources){
+              sources.delete(key);
+              if(!sources.size){
+                orderDocSources.delete(docId);
+                orderDocs.delete(docId);
+              }
+            }
+            return;
+          }
+
+          let sources=orderDocSources.get(docId);
+          if(!sources){
+            sources=new Set();
+            orderDocSources.set(docId,sources);
+          }
+          sources.add(key);
+          orderDocs.set(docId,change.doc);
+        });
+
+        updateOrdersFromAggregated();
+      },err=>{
+        console.error("Erro ao carregar pedidos:", err);
+        cleanupOrderListeners();
+        state.ordersError="Não foi possível carregar seus pedidos. Tente novamente mais tarde.";
+        state.ordersLoading=false;
+        renderOrders();
+      });
+      orderUnsubscribes.push(unsub);
+    });
+  }
+
+  function updateOrdersFromAggregated(){
+    const orders=[];
+    orderDocs.forEach(doc=>{
+      orders.push(mapOrderDocument(doc));
+    });
+    orders.sort((a,b)=>(b.createdAt?.getTime?.()||0)-(a.createdAt?.getTime?.()||0));
+
+    const prevTracking=state.orderTracking||{};
+    const nextTracking={};
+    for(const order of orders){
+      const prev=prevTracking[order.id];
+      if(prev && prev.code===order.trackingCode){
+        nextTracking[order.id]=prev;
+      }
+    }
+
+    state.orderTracking=nextTracking;
+    state.orders=orders;
+    state.ordersError="";
+    state.ordersLoading=orderPendingKeys.size>0;
+    renderOrders();
+  }
+
+  function renderOrders(){
+    if(!els.ordersSection) return;
+
+    const logged=!!auth.currentUser;
+    if(els.ordersGuest) toggle(els.ordersGuest, logged);
+
+    if(els.ordersError){
+      if(state.ordersError){
+        els.ordersError.textContent=state.ordersError;
+        toggle(els.ordersError,false);
+      }else{
+        els.ordersError.textContent="";
+        toggle(els.ordersError,true);
+      }
+    }
+
+    if(!logged){
+      if(els.ordersLoading) toggle(els.ordersLoading,true);
+      if(els.ordersEmpty) toggle(els.ordersEmpty,true);
+      if(els.ordersList){
+        els.ordersList.innerHTML="";
+        toggle(els.ordersList,true);
+      }
+      return;
+    }
+
+    if(state.ordersError){
+      if(els.ordersLoading) toggle(els.ordersLoading,true);
+      if(els.ordersEmpty) toggle(els.ordersEmpty,true);
+      if(els.ordersList){
+        els.ordersList.innerHTML="";
+        toggle(els.ordersList,true);
+      }
+      return;
+    }
+
+    if(state.ordersLoading){
+      if(els.ordersLoading) toggle(els.ordersLoading,false);
+      if(els.ordersEmpty) toggle(els.ordersEmpty,true);
+      if(els.ordersList) toggle(els.ordersList,true);
+      return;
+    }
+
+    if(els.ordersLoading) toggle(els.ordersLoading,true);
+
+    const hasOrders=state.orders.length>0;
+    if(els.ordersEmpty) toggle(els.ordersEmpty, hasOrders);
+
+    if(!els.ordersList) return;
+    toggle(els.ordersList,!hasOrders);
+    els.ordersList.innerHTML="";
+    if(!hasOrders) return;
+
+    state.orders.forEach(order=>{
+      const card=renderOrderCard(order);
+      if(!card) return;
+      els.ordersList.appendChild(card);
+      if(order.trackingCode){
+        requestTracking(order);
+      }else{
+        state.orderTracking[order.id]=null;
+        updateTrackingUI(order.id);
+      }
+    });
+  }
+
+  function renderOrderCard(order){
+    if(!order) return null;
+    const statusInfo=getOrderStatusInfo(order.status);
+    const card=document.createElement("article");
+    card.className=`card order-card ${statusInfo.className}`;
+
+    const friendlyId=order.id?order.id.slice(-6).toUpperCase():"000000";
+    const createdAtText=formatOrderDate(order.createdAt);
+    const customer=order.customer||{};
+    const destination=[customer.address,customer.cep].filter(Boolean).join(" · ");
+
+    const metaLines=[];
+    if(createdAtText) metaLines.push(`Realizado em ${createdAtText}`);
+    if(destination) metaLines.push(destination);
+
+    const items=Array.isArray(order.items)?order.items:[];
+    const itemsHtml=items.map(item=>{
+      const qty=Math.max(1, Number(item?.qty)||1);
+      const name=escapeHtml(item?.name||"Item");
+      const ml=item?.ml?` (${escapeHtml(item.ml)})`:"";
+      return `<li>${qty}x ${name}${ml}</li>`;
+    }).join("");
+
+    const trackingSection=order.trackingCode
+      ? `<div class="order-tracking" data-order-id="${order.id}">
+          <div class="order-tracking__code">Código: <strong>${escapeHtml(order.trackingCode)}</strong></div>
+          <div class="order-tracking__status" data-tracking-status="${order.id}">
+            <span class="muted">Consultando status nos Correios...</span>
+          </div>
+          <div class="order-card__tracking-actions">
+            <button class="btn small ghost" data-refresh-tracking="${order.id}">Atualizar rastreio</button>
+            <a class="btn small ghost" href="https://rastreamento.correios.com.br/app/index.php?codigo=${encodeURIComponent(order.trackingCode)}" target="_blank" rel="noreferrer">Ver no site dos Correios</a>
+          </div>
+        </div>`
+      : `<p class="muted">O código de rastreio será informado assim que o pedido for postado.</p>`;
+
+    card.innerHTML=`
+      <div class="pad order-card__content">
+        <div class="order-card__header">
+          <div>
+            <p class="order-card__title">Pedido #${escapeHtml(friendlyId)}</p>
+            ${metaLines.map(line=>`<p class="order-card__meta-line">${escapeHtml(line)}</p>`).join("")}
+          </div>
+          <span class="order-card__status-badge ${statusInfo.className}">${statusInfo.label}</span>
+        </div>
+        <div class="order-card__details">
+          <div>
+            <span class="order-card__label">Status do pedido</span>
+            <span class="order-card__value">${escapeHtml(statusInfo.description)}</span>
+          </div>
+          <div>
+            <span class="order-card__label">Pagamento</span>
+            <span class="order-card__value">${escapeHtml(customer.payment||"Não informado")}</span>
+          </div>
+          <div>
+            <span class="order-card__label">Total</span>
+            <span class="order-card__value">${formatBRL(order.total)}</span>
+          </div>
+        </div>
+        <div class="order-card__items">
+          <span class="order-card__label">Itens</span>
+          <ul>${itemsHtml||"<li class='muted'>Nenhum item registrado.</li>"}</ul>
+        </div>
+        <div class="order-card__tracking">
+          <span class="order-card__label">Envio e rastreio</span>
+          ${trackingSection}
+        </div>
+      </div>`;
+    return card;
+  }
+
+  function requestTracking(order,force=false){
+    const code=sanitizeTrackingCode(order?.trackingCode||"");
+    const id=order?.id;
+    if(!id||!code){
+      if(id){
+        state.orderTracking[id]=null;
+        updateTrackingUI(id);
+      }
+      return;
+    }
+    const existing=state.orderTracking[id];
+    if(!force && existing && existing.code===code && (existing.status==="loading"||existing.status==="loaded")){
+      updateTrackingUI(id);
+      return;
+    }
+    state.orderTracking[id]={code,status:"loading"};
+    updateTrackingUI(id);
+    fetchTracking(code)
+      .then(data=>{
+        state.orderTracking[id]={code,status:"loaded",data,fetchedAt:new Date()};
+        updateTrackingUI(id);
+      })
+      .catch(err=>{
+        state.orderTracking[id]={code,status:"error",message:err?.message||"Falha ao consultar rastreio"};
+        updateTrackingUI(id);
+      });
+  }
+
+  async function fetchTracking(code){
+    const resp=await fetch(`/api/tracking?code=${encodeURIComponent(code)}`);
+    const text=await resp.text();
+    let payload={};
+    if(text){
+      try{ payload=JSON.parse(text); }catch{ payload={}; }
+    }
+    if(!resp.ok){
+      const message=payload?.error||`HTTP ${resp.status}`;
+      throw new Error(message);
+    }
+    if(payload?.error){
+      throw new Error(payload.error);
+    }
+    return payload;
+  }
+
+  function updateTrackingUI(orderId){
+    if(!orderId||!els.ordersList) return;
+    const container=els.ordersList.querySelector(`[data-tracking-status="${orderId}"]`);
+    if(!container) return;
+    const tracking=state.orderTracking[orderId];
+    if(!tracking||!tracking.code){
+      container.innerHTML=`<span class="muted">Aguardando código de rastreio.</span>`;
+      return;
+    }
+    if(tracking.status==="loading"){
+      container.innerHTML=`<span class="muted">Consultando status nos Correios...</span>`;
+      return;
+    }
+    if(tracking.status==="error"){
+      container.innerHTML=`<span class="muted">Não foi possível atualizar o rastreio (${escapeHtml(tracking.message||"Erro desconhecido")}).</span>`;
+      return;
+    }
+    const events=Array.isArray(tracking.data?.events)?tracking.data.events:[];
+    if(!events.length){
+      container.innerHTML=`<span class="muted">Nenhuma atualização encontrada pelos Correios até o momento.</span>`;
+      return;
+    }
+
+    const last=events[0]||{};
+    const title=escapeHtml(last.status||last.description||"Atualização");
+    const momentText=formatTrackingMoment(last);
+    const momentHtml=momentText?escapeHtml(momentText):"";
+    const locationHtml=last.location?escapeHtml(last.location):"";
+    const infoParts=[];
+    if(momentHtml) infoParts.push(momentHtml);
+    if(locationHtml) infoParts.push(locationHtml);
+    const infoLine=infoParts.length?`<span>${infoParts.join(" · ")}</span>`:"";
+    const detailsText=last.details&&last.details!==last.description?last.details:last.description;
+    const detailsHtml=detailsText?`<p>${escapeHtml(detailsText)}</p>`:"";
+    const fetchedHtml=tracking.fetchedAt?`<span class="muted">Atualizado em ${escapeHtml(formatOrderDate(tracking.fetchedAt))}</span>`:"";
+
+    const historyItems=events.map(ev=>{
+      const eventTitle=escapeHtml(ev.status||ev.description||"Atualização");
+      const eventMoment=formatTrackingMoment(ev);
+      const eventMomentHtml=eventMoment?escapeHtml(eventMoment):"";
+      const eventLocation=ev.location?escapeHtml(ev.location):"";
+      const info=[];
+      if(eventMomentHtml) info.push(eventMomentHtml);
+      if(eventLocation) info.push(eventLocation);
+      const infoHtml=info.length?`<span>${info.join(" · ")}</span>`:"";
+      const eventDetails=ev.details&&ev.details!==ev.description?`<div>${escapeHtml(ev.details)}</div>`:"";
+      return `<li><strong>${eventTitle}</strong>${infoHtml}${eventDetails}</li>`;
+    }).join("");
+
+    container.innerHTML=`
+      <div class="order-tracking__event">
+        <div class="order-tracking__event-head">
+          <strong>${title}</strong>
+          ${infoLine}
+        </div>
+        ${detailsHtml}
+        ${fetchedHtml}
+      </div>
+      ${events.length>1?`<details class="order-tracking__history"><summary>Ver histórico completo</summary><ul>${historyItems}</ul></details>`:""}
+    `;
+  }
+
+  function formatOrderDate(value){
+    if(!value) return "";
+    let date=value;
+    if(!(date instanceof Date)){
+      date=new Date(date);
+    }
+    if(!(date instanceof Date)||Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+  }
+
+  function formatTrackingMoment(ev={}){
+    if(ev.timestamp){
+      const dt=new Date(ev.timestamp);
+      if(!Number.isNaN(dt.getTime())){
+        return dt.toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+      }
+    }
+    if(ev.date&&ev.time){
+      const composed=new Date(`${ev.date}T${ev.time}`);
+      if(!Number.isNaN(composed.getTime())){
+        return composed.toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+      }
+      return `${ev.date} ${ev.time}`;
+    }
+    if(ev.date) return ev.date;
+    if(ev.time) return ev.time;
+    if(ev.raw?.dtHrCriado){
+      const dt=new Date(ev.raw.dtHrCriado);
+      if(!Number.isNaN(dt.getTime())){
+        return dt.toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+      }
+    }
+    return "";
+  }
+
+  function mapOrderDocument(doc){
+    if(!doc) return {id:"",status:"pending",items:[],total:0,customer:{},trackingCode:""};
+    const data=typeof doc.data==="function"?doc.data():{};
+    const createdAt=typeof data?.createdAt?.toDate==="function"?data.createdAt.toDate():data?.createdAt instanceof Date?data.createdAt:null;
+    const items=Array.isArray(data?.items)?data.items.map(item=>({
+      id:item?.id||"",
+      name:item?.name||"",
+      ml:item?.ml||"",
+      qty:item?.qty||1,
+      price:item?.price||0
+    })):
+    [];
+    const customer=data?.customer||{};
+    const trackingCode=sanitizeTrackingCode(data?.trackingCode||data?.shipping?.trackingCode||"");
+    return {
+      id:doc.id,
+      status:data?.status||"pending",
+      createdAt,
+      items,
+      total:Number(data?.total)||0,
+      customer:{
+        name:customer?.name||"",
+        email:customer?.email||"",
+        cep:customer?.cep||"",
+        address:customer?.address||"",
+        payment:customer?.payment||"",
+        phone:customer?.phone||"",
+        city:customer?.city||"",
+        state:customer?.state||""
+      },
+      trackingCode
+    };
+  }
+
   /* ==== Helpers ==== */
   function mapIds(ids){const o={};ids.forEach(id=>o[id]=document.getElementById(id));return o;}
   function toggle(el,h){if(el) el.classList.toggle("hidden",h);}
+  function getOrderStatusInfo(status){const key=(status||"pending").toString().toLowerCase();return ORDER_STATUS[key]||ORDER_STATUS.pending;}
   function loadCart(){try{return JSON.parse(localStorage.getItem("cart")||"[]");}catch{return []}}
   function saveCart(v){localStorage.setItem("cart",JSON.stringify(v));}
   function formatBRL(n){return n?.toLocaleString?.("pt-BR",{style:"currency",currency:"BRL"})??"R$ 0,00";}
   function sanitizeImg(src){return src||"https://picsum.photos/seed/duoparfum/600/400";}
   function isValidEmail(email=""){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);}
+  function sanitizeTrackingCode(code=""){return code.toString().toUpperCase().replace(/[^A-Z0-9]/g,"");}
   function escapeHtml(s=""){return s.replace(/[&<>\"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
 });

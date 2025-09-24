@@ -102,6 +102,14 @@
         return amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
       };
 
+      const escapeHtml = (value = "") =>
+        value
+          .toString()
+          .replace(/[&<>"']/g, (match) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[match]));
+
+      const sanitizeTrackingCode = (code = "") =>
+        code.toString().toUpperCase().replace(/[^A-Z0-9]/g, "");
+
       function getOrderStatusInfo(status) {
         const normalized = (status || "pending").toString().toLowerCase();
         return ORDER_STATUS[normalized] || ORDER_STATUS.pending;
@@ -297,12 +305,13 @@
           const itemsList = items
             .map(item => {
               const quantity = item?.qty || 1;
-              const name = item?.name || "Item";
-              const ml = item?.ml ? ` (${item.ml})` : "";
+              const name = escapeHtml(item?.name || "Item");
+              const ml = item?.ml ? ` (${escapeHtml(item.ml)})` : "";
               return `<li>${quantity}x ${name}${ml}</li>`;
             })
             .join("");
 
+          const trackingCode = sanitizeTrackingCode(data.trackingCode || data.shipping?.trackingCode || "");
           const contactLine = [data.customer?.email, data.customer?.phone].filter(Boolean).join(" · ");
           const addressLine = [data.customer?.cep, data.customer?.address, data.customer?.city, data.customer?.state]
             .filter(Boolean)
@@ -311,8 +320,18 @@
           const createdAtLine = createdAt ? `Realizado em ${createdAt.toLocaleString("pt-BR")}` : "";
           const metaLines = [contactLine, addressLine, createdAtLine]
             .filter(Boolean)
-            .map(line => `<p class="order-card__meta-line">${line}</p>`)
+            .map(line => `<p class="order-card__meta-line">${escapeHtml(line)}</p>`)
             .join("");
+
+          const trackingHtml = `
+            <div class="order-card__tracking-admin">
+              <span class="order-card__label">Rastreio Correios</span>
+              <div class="order-card__tracking-actions">
+                <input class="input order-card__tracking-input" data-tracking-input="${doc.id}" placeholder="Ex: LB123456789BR" value="${escapeHtml(trackingCode)}">
+                <button class="btn small ghost" onclick="saveTracking('${doc.id}')">Salvar</button>
+                ${trackingCode ? `<a class="btn small ghost" href="https://rastreamento.correios.com.br/app/index.php?codigo=${trackingCode}" target="_blank" rel="noreferrer">Ver no Correios</a>` : ""}
+              </div>
+            </div>`;
 
           const statusButtons = [
             { value: "paid", label: "Pago" },
@@ -332,7 +351,7 @@
             <div class="pad order-card__content">
               <div class="order-card__header">
                 <div>
-                  <p class="order-card__title">${data.customer?.name || "Cliente"}</p>
+                  <p class="order-card__title">${escapeHtml(data.customer?.name || "Cliente")}</p>
                   ${metaLines}
                 </div>
                 <span class="order-card__status-badge ${statusInfo.className}">${statusInfo.label}</span>
@@ -340,7 +359,7 @@
               <div class="order-card__details">
                 <div>
                   <span class="order-card__label">Pagamento</span>
-                  <span class="order-card__value">${data.customer?.payment || "Não informado"}</span>
+                  <span class="order-card__value">${escapeHtml(data.customer?.payment || "Não informado")}</span>
                 </div>
                 <div>
                   <span class="order-card__label">Total</span>
@@ -351,6 +370,7 @@
                 <span class="order-card__label">Itens</span>
                 <ul>${itemsList || "<li class='muted'>Nenhum item registrado.</li>"}</ul>
               </div>
+              ${trackingHtml}
               <div class="order-card__actions">
                 <button class="btn small ghost danger" onclick="deleteOrder('${doc.id}')">Excluir</button>
                 <div class="order-card__actions-group">
@@ -370,6 +390,30 @@
         } catch (err) {
           console.error("Erro ao atualizar pedido:", err);
           alert("Não foi possível atualizar o status do pedido.");
+        }
+      };
+
+      window.saveTracking = async (id) => {
+        const input = document.querySelector(`[data-tracking-input="${id}"]`);
+        if (!input) {
+          alert("Campo de rastreio não encontrado.");
+          return;
+        }
+
+        const sanitized = sanitizeTrackingCode(input.value || "");
+        input.value = sanitized;
+
+        const updatePayload = sanitized
+          ? { trackingCode: sanitized }
+          : { trackingCode: firebase.firestore.FieldValue.delete() };
+
+        try {
+          await db.collection("orders").doc(id).update(updatePayload);
+          alert(sanitized ? "Código de rastreio atualizado." : "Código de rastreio removido.");
+          loadOrders();
+        } catch (err) {
+          console.error("Erro ao salvar código de rastreio:", err);
+          alert("Não foi possível atualizar o código de rastreio.");
         }
       };
 
