@@ -41,7 +41,10 @@
         <input id="pNotes" class="input" placeholder="Notas">
         <input id="pCategory" class="input" placeholder="Categoria">
         <input id="pImage" type="file" accept="image/*" class="input">
-        <button class="btn">Salvar produto</button>
+        <div class="row gap">
+          <button type="submit" class="btn" id="btnSubmitProduct">Salvar produto</button>
+          <button type="button" class="btn ghost" id="btnCancelEdit" style="display:none">Cancelar edição</button>
+        </div>
       </form>
       <div id="productList" class="grid"></div>
     </section>
@@ -85,6 +88,8 @@
         pNotes: document.getElementById("pNotes"),
         pCategory: document.getElementById("pCategory"),
         pImage: document.getElementById("pImage"),
+        btnSubmit: document.getElementById("btnSubmitProduct"),
+        btnCancelEdit: document.getElementById("btnCancelEdit"),
         productList: document.getElementById("productList"),
         orderList: document.getElementById("orderList"),
         btnLogout: document.getElementById("btnLogout")
@@ -95,6 +100,12 @@
         paid: { key: "paid", label: "Pago", className: "is-paid" },
         sent: { key: "sent", label: "Enviado", className: "is-sent" },
         canceled: { key: "canceled", label: "Cancelado", className: "is-canceled" }
+      };
+
+      const productsCache = new Map();
+      const formState = {
+        editingProductId: null,
+        currentImageUrl: ""
       };
 
       const formatCurrency = (value) => {
@@ -195,10 +206,32 @@
       els.btnLogout.onclick = () => auth.signOut();
 
       /* ==== Produtos ==== */
+      function resetProductForm() {
+        formState.editingProductId = null;
+        formState.currentImageUrl = "";
+
+        if (els.form) {
+          els.form.reset();
+        }
+        if (els.pImage) {
+          els.pImage.value = "";
+        }
+        if (els.btnSubmit) {
+          els.btnSubmit.textContent = "Salvar produto";
+        }
+        if (els.btnCancelEdit) {
+          els.btnCancelEdit.style.display = "none";
+        }
+      }
+
+      if (els.btnCancelEdit) {
+        els.btnCancelEdit.addEventListener("click", resetProductForm);
+      }
+
       els.form.onsubmit = async (e) => {
         e.preventDefault();
         const file = els.pImage.files[0];
-        let url = "";
+        const isEditing = Boolean(formState.editingProductId);
         const priceValue = parseFloat(els.pPrice.value);
 
         if (!Number.isFinite(priceValue)) {
@@ -206,52 +239,116 @@
           return;
         }
 
+        let imageUrl = formState.currentImageUrl || "";
+        const currentProduct = isEditing
+          ? productsCache.get(formState.editingProductId) || null
+          : null;
+
         try {
           if (file) {
             const ref = storage.ref("products/" + Date.now() + "-" + file.name);
             await ref.put(file);
-            url = await ref.getDownloadURL();
+            imageUrl = await ref.getDownloadURL();
+            if (isEditing) {
+              formState.currentImageUrl = imageUrl;
+            }
           }
 
-          await callProductsApi("POST", {
-            name: els.pName.value,
-            brand: els.pBrand.value,
-            ml: els.pMl.value,
-            price: priceValue,
-            notes: els.pNotes.value,
-            category: els.pCategory.value,
-            image: url,
-            featured: false
-          });
+          if (isEditing) {
+            const payload = {
+              id: formState.editingProductId,
+              name: els.pName.value,
+              brand: els.pBrand.value,
+              ml: els.pMl.value,
+              price: priceValue,
+              notes: els.pNotes.value,
+              category: els.pCategory.value,
+              image: imageUrl
+            };
 
-          els.form.reset();
+            if (currentProduct && typeof currentProduct.featured !== "undefined") {
+              payload.featured = Boolean(currentProduct.featured);
+            }
+
+            await callProductsApi("PATCH", payload);
+          } else {
+            await callProductsApi("POST", {
+              name: els.pName.value,
+              brand: els.pBrand.value,
+              ml: els.pMl.value,
+              price: priceValue,
+              notes: els.pNotes.value,
+              category: els.pCategory.value,
+              image: imageUrl,
+              featured: false
+            });
+          }
+
+          resetProductForm();
           loadProducts();
         } catch (err) {
-          console.error("Erro ao salvar produto:", err);
+          console.error(isEditing ? "Erro ao atualizar produto:" : "Erro ao salvar produto:", err);
           if (!err?.displayed) {
-            alert("Erro ao salvar produto.");
+            alert(isEditing ? "Erro ao atualizar produto." : "Erro ao salvar produto.");
           }
         }
       };
 
       async function loadProducts() {
-        const snap = await db.collection("products").orderBy("createdAt","desc").get();
+        const snap = await db.collection("products").orderBy("createdAt", "desc").get();
         els.productList.innerHTML = "";
+        productsCache.clear();
+
+        if (snap.empty) {
+          els.productList.innerHTML = '<div class="muted">Nenhum produto cadastrado até o momento.</div>';
+          return;
+        }
+
         snap.forEach(doc => {
-          const d = doc.data();
+          const data = doc.data() || {};
+          const rawPrice = Number(data.price);
+          const hasValidPrice = Number.isFinite(rawPrice);
+          const rawStock = Number(data.stock);
+          const normalizedStock = Number.isFinite(rawStock) ? rawStock : 0;
+          const product = {
+            id: doc.id,
+            name: data.name || "",
+            brand: data.brand || "",
+            ml: data.ml || "",
+            price: hasValidPrice ? rawPrice : "",
+            notes: data.notes || "",
+            category: data.category || "",
+            image: data.image || "",
+            stock: Math.max(normalizedStock, 0),
+            featured: data.featured
+          };
+
+          productsCache.set(product.id, product);
+
+          const priceLabel = formatCurrency(hasValidPrice ? rawPrice : 0);
+          const mlLabel = product.ml ? ` (${escapeHtml(product.ml)})` : "";
+          const brandLine = product.brand ? `<div class="muted">${escapeHtml(product.brand)}</div>` : "";
+          const categoryLine = product.category ? `<div class="muted">Categoria: ${escapeHtml(product.category)}</div>` : "";
+          const notesLine = product.notes ? `<div class="muted">Notas: ${escapeHtml(product.notes)}</div>` : "";
+          const imageSrc = escapeHtml(product.image || "https://picsum.photos/200");
+          const altText = escapeHtml(product.name || "Produto");
+
           const card = document.createElement("div");
           card.className = "card";
           card.innerHTML = `
-            <img src="${d.image || "https://picsum.photos/200"}">
+            <img src="${imageSrc}" alt="${altText}">
             <div class="pad">
-              <div><strong>${d.name}</strong> (${d.ml || ""})</div>
-              <div class="muted">${d.brand || ""}</div>
-              <div class="muted">${(d.price||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}</div>
-              <div class="muted">Estoque: ${d.stock || 0}</div>
+              <div><strong>${escapeHtml(product.name)}</strong>${mlLabel}</div>
+              ${brandLine}
+              <div class="muted">${escapeHtml(priceLabel)}</div>
+              ${categoryLine}
+              ${notesLine}
+              <div class="muted">Estoque: ${product.stock}</div>
               <div class="row gap" style="margin-top:8px">
-                <button class="btn small" onclick="updateStock('${doc.id}',1)">+1</button>
-                <button class="btn small" onclick="updateStock('${doc.id}',-1)">-1</button>
-                <button class="btn small" onclick="deleteProduct('${doc.id}')">Excluir</button>
+                <button class="btn small" onclick="updateStock('${product.id}',1)">+1</button>
+                <button class="btn small" onclick="updateStock('${product.id}',-1)">-1</button>
+                <button class="btn small" onclick="editProduct('${product.id}')">Editar</button>
+                <button class="btn small" onclick="deleteProduct('${product.id}')">Excluir</button>
               </div>
             </div>`;
           els.productList.appendChild(card);
@@ -281,6 +378,43 @@
             alert("Erro ao excluir produto.");
           }
         }
+      };
+
+      window.editProduct = (id) => {
+        const product = productsCache.get(id);
+        if (!product) {
+          alert("Produto não encontrado.");
+          return;
+        }
+
+        formState.editingProductId = product.id;
+        formState.currentImageUrl = product.image || "";
+
+        els.pName.value = product.name || "";
+        els.pBrand.value = product.brand || "";
+        els.pMl.value = product.ml || "";
+
+        if (typeof product.price === "number") {
+          els.pPrice.value = product.price.toString();
+        } else {
+          els.pPrice.value = "";
+        }
+
+        els.pNotes.value = product.notes || "";
+        els.pCategory.value = product.category || "";
+
+        if (els.pImage) {
+          els.pImage.value = "";
+        }
+        if (els.btnSubmit) {
+          els.btnSubmit.textContent = "Atualizar produto";
+        }
+        if (els.btnCancelEdit) {
+          els.btnCancelEdit.style.display = "inline-flex";
+        }
+
+        els.pName.focus();
+        window.scrollTo({ top: 0, behavior: "smooth" });
       };
 
       loadProducts();
