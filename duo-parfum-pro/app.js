@@ -7,7 +7,7 @@ const firebaseConfig = window.firebaseConfig || {
   messagingSenderId: "889684986920",
   appId: "1:889684986920:web:9d452daf2192124b19391d"
 };
-const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
+const ADMIN_EMAILS = ["guilhermeserraglio@gmail.com"];
 const ORDER_STATUS = {
   pending: { key: "pending", label: "Pendente", className: "is-pending", description: "Aguardando confirmação de pagamento" },
   paid: { key: "paid", label: "Pago", className: "is-paid", description: "Pagamento confirmado" },
