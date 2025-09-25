@@ -1,5 +1,5 @@
 /* ========= CONFIG FIREBASE ========= */
-const firebaseConfig = window.firebaseConfig || {
+const DEFAULT_FIREBASE_CONFIG = {
   apiKey: "AIzaSyDVkpsr4z6LolEOkNTGcc9TmKeiu4-mi1Y",
   authDomain: "duoparfum-61ec2.firebaseapp.com",
   projectId: "duoparfum-61ec2",
@@ -7,7 +7,10 @@ const firebaseConfig = window.firebaseConfig || {
   messagingSenderId: "889684986920",
   appId: "1:889684986920:web:9d452daf2192124b19391d"
 };
-const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
+const ADMIN_EMAILS = [
+  "guilhermeserraglio03@gmail.com",
+  "guilhermeserraglio@gmail.com",
+];
 const ORDER_STATUS = {
   pending: { key: "pending", label: "Pendente", className: "is-pending", description: "Aguardando confirmação de pagamento" },
   paid: { key: "paid", label: "Pago", className: "is-paid", description: "Pagamento confirmado" },
@@ -18,8 +21,55 @@ const ORDER_STATUS = {
 
 let app, db, auth;
 
+const REQUIRED_FIREBASE_KEYS = ["apiKey", "authDomain", "projectId", "appId"];
+
+function isValidFirebaseConfig(candidate) {
+  if (!candidate || typeof candidate !== "object") {
+    return false;
+  }
+
+  return REQUIRED_FIREBASE_KEYS.every((key) => {
+    const value = candidate[key];
+    return typeof value === "string" && value.trim();
+  });
+}
+
+async function resolveFirebaseConfig() {
+  if (isValidFirebaseConfig(window.firebaseConfig)) {
+    return window.firebaseConfig;
+  }
+
+  if (typeof window.getFirebaseConfig === "function") {
+    try {
+      const remoteConfig = await window.getFirebaseConfig();
+      if (isValidFirebaseConfig(remoteConfig)) {
+        return remoteConfig;
+      }
+    } catch (err) {
+      console.warn("Não foi possível obter configuração remota do Firebase:", err);
+    }
+  }
+
+  console.warn(
+    "Usando configuração padrão do Firebase. Configure as variáveis FIREBASE_WEB_* para apontar para o mesmo projeto do backend."
+  );
+  return DEFAULT_FIREBASE_CONFIG;
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
-  app = firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig);
+  if (!window.firebase) {
+    console.error("Firebase SDK não carregado. Verifique a ordem dos scripts na página.");
+    return;
+  }
+
+  const firebaseConfig = await resolveFirebaseConfig();
+
+  if (!firebase.apps?.length) {
+    firebase.initializeApp(firebaseConfig);
+  }
+
+  window.firebaseConfig = firebaseConfig;
+  app = firebase.app();
   auth = firebase.auth();
   db = firebase.firestore();
 
