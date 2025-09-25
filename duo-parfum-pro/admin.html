@@ -61,15 +61,36 @@
   <script>
     const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
 
-    document.addEventListener("DOMContentLoaded", () => {
-      const firebaseConfig = window.firebaseConfig || {
-        apiKey: "AIzaSyDVkpsr4z6LolEOkNTGcc9TmKeiu4-mi1Y",
-        authDomain: "duoparfum-61ec2.firebaseapp.com",
-        projectId: "duoparfum-61ec2",
-        storageBucket: "duoparfum-61ec2.firebasestorage.app",
-        messagingSenderId: "889684986920",
-        appId: "1:889684986920:web:9d452daf2192124b19391d"
-      };
+    document.addEventListener("DOMContentLoaded", async () => {
+      const missingConfigMessage = "Configuração do Firebase não encontrada. Verifique as variáveis FIREBASE_WEB_* na Vercel.";
+
+      const configPromise =
+        typeof window.getFirebaseConfig === "function"
+          ? window.getFirebaseConfig()
+          : Promise.reject(new Error(missingConfigMessage));
+
+      let firebaseConfig = null;
+      try {
+        const resolved = await configPromise;
+        if (resolved && typeof resolved === "object") {
+          firebaseConfig = resolved;
+        }
+      } catch (err) {
+        console.error("Falha ao carregar configuração do Firebase.", err);
+        alert(missingConfigMessage);
+        return;
+      }
+
+      const hasConfig = firebaseConfig && ["apiKey", "authDomain", "projectId", "appId"].every((key) => {
+        const value = firebaseConfig[key];
+        return typeof value === "string" && value.trim();
+      });
+
+      if (!hasConfig) {
+        console.error("Configuração do Firebase inválida recebida:", firebaseConfig);
+        alert(missingConfigMessage);
+        return;
+      }
 
       if (!firebase.apps?.length) {
         firebase.initializeApp(firebaseConfig);
