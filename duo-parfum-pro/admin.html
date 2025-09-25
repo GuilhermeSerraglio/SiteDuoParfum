@@ -61,15 +61,36 @@
   <script>
     const ADMIN_EMAILS = ["guilhermeserraglio03@gmail.com"];
 
-    document.addEventListener("DOMContentLoaded", () => {
-      const firebaseConfig = window.firebaseConfig || {
-        apiKey: "AIzaSyDVkpsr4z6LolEOkNTGcc9TmKeiu4-mi1Y",
-        authDomain: "duoparfum-61ec2.firebaseapp.com",
-        projectId: "duoparfum-61ec2",
-        storageBucket: "duoparfum-61ec2.firebasestorage.app",
-        messagingSenderId: "889684986920",
-        appId: "1:889684986920:web:9d452daf2192124b19391d"
-      };
+    document.addEventListener("DOMContentLoaded", async () => {
+      const missingConfigMessage = "Configuração do Firebase não encontrada. Verifique as variáveis FIREBASE_WEB_* na Vercel.";
+
+      const configPromise =
+        typeof window.getFirebaseConfig === "function"
+          ? window.getFirebaseConfig()
+          : Promise.reject(new Error(missingConfigMessage));
+
+      let firebaseConfig = null;
+      try {
+        const resolved = await configPromise;
+        if (resolved && typeof resolved === "object") {
+          firebaseConfig = resolved;
+        }
+      } catch (err) {
+        console.error("Falha ao carregar configuração do Firebase.", err);
+        alert(missingConfigMessage);
+        return;
+      }
+
+      const hasConfig = firebaseConfig && ["apiKey", "authDomain", "projectId", "appId"].every((key) => {
+        const value = firebaseConfig[key];
+        return typeof value === "string" && value.trim();
+      });
+
+      if (!hasConfig) {
+        console.error("Configuração do Firebase inválida recebida:", firebaseConfig);
+        alert(missingConfigMessage);
+        return;
+      }
 
       if (!firebase.apps?.length) {
         firebase.initializeApp(firebaseConfig);
@@ -308,8 +329,6 @@
           const data = doc.data() || {};
           const rawPrice = Number(data.price);
           const hasValidPrice = Number.isFinite(rawPrice);
-          const rawStock = Number(data.stock);
-          const normalizedStock = Number.isFinite(rawStock) ? rawStock : 0;
           const product = {
             id: doc.id,
             name: data.name || "",
@@ -319,7 +338,6 @@
             notes: data.notes || "",
             category: data.category || "",
             image: data.image || "",
-            stock: Math.max(normalizedStock, 0),
             featured: data.featured
           };
 
@@ -343,10 +361,7 @@
               <div class="muted">${escapeHtml(priceLabel)}</div>
               ${categoryLine}
               ${notesLine}
-              <div class="muted">Estoque: ${product.stock}</div>
               <div class="row gap" style="margin-top:8px">
-                <button class="btn small" onclick="updateStock('${product.id}',1)">+1</button>
-                <button class="btn small" onclick="updateStock('${product.id}',-1)">-1</button>
                 <button class="btn small" onclick="editProduct('${product.id}')">Editar</button>
                 <button class="btn small" onclick="deleteProduct('${product.id}')">Excluir</button>
               </div>
@@ -354,18 +369,6 @@
           els.productList.appendChild(card);
         });
       }
-
-      window.updateStock = async (id, delta) => {
-        try {
-          await callProductsApi("PATCH", { id, delta });
-          loadProducts();
-        } catch (err) {
-          console.error("Erro ao atualizar estoque:", err);
-          if (!err?.displayed) {
-            alert("Erro ao atualizar estoque.");
-          }
-        }
-      };
 
       window.deleteProduct = async (id) => {
         if (!confirm("Excluir produto?")) return;
