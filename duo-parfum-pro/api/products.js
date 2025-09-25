@@ -1,6 +1,7 @@
 const admin = require("firebase-admin");
 
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "guilhermeserraglio@gmail.com")
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS ||
+  "guilhermeserraglio03@gmail.com,guilhermeserraglio@gmail.com")
   .split(",")
   .map((email) => email.trim().toLowerCase())
   .filter(Boolean);
