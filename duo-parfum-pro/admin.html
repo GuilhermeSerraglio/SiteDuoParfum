@@ -225,6 +225,28 @@
           alert("Acesso negado. Somente administradores.");
           window.location.href = "/";
         }
+        /* ==== Mostrar email do admin logado ==== */
+auth.onAuthStateChanged(user => {
+  if (!user || !ADMIN_EMAILS.includes(user.email)) {
+    alert("Acesso negado. Somente administradores.");
+    window.location.href = "/";
+  } else {
+    // Mostra no console
+    console.log("✅ Admin logado:", user.email);
+
+    // Exibe na tela (exemplo no header)
+    const header = document.querySelector(".topbar .container");
+    if (header) {
+      const userInfo = document.createElement("span");
+      userInfo.textContent = `Logado como: ${user.email}`;
+      userInfo.style.marginLeft = "20px";
+      userInfo.style.fontSize = "0.9rem";
+      userInfo.style.color = "#666";
+      header.appendChild(userInfo);
+    }
+  }
+});
+
       });
 
       /* ==== Logout ==== */
