@@ -45,6 +45,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (els.btnLogout) toggle(els.btnLogout, !logged);
     if (els.linkAdmin) toggle(els.linkAdmin, !(logged && ADMIN_EMAILS.includes(user?.email)));
     if (els.linkOrders) toggle(els.linkOrders, !logged);
+    if (els.btnCheckout) {
+      if (!logged) {
+        els.btnCheckout.setAttribute("title", "Faça login para finalizar a compra");
+      } else {
+        els.btnCheckout.removeAttribute("title");
+      }
+    }
+    if (logged && els.ckEmail && typeof user?.email === "string") {
+      els.ckEmail.value = user.email;
+    }
 
     if (!logged) {
       cleanupOrderListeners();
@@ -88,6 +98,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (els.btnCheckout) {
     els.btnCheckout.onclick = ()=>{
       if(!state.cart.length){ alert("Seu carrinho está vazio."); return; }
+      if(!auth.currentUser){ alert("Faça login para finalizar a compra."); return; }
       resetCheckoutModal();
       openDrawer(false);
       els.checkoutModal?.showModal();
@@ -323,6 +334,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function confirmCheckout(){
     if(state.processingCheckout) return;
+    if(!auth.currentUser){ alert("Faça login para finalizar a compra."); return; }
     const name=(els.ckName?.value||"").trim();
     const email=(els.ckEmail?.value||"").trim().toLowerCase();
     const cep=(els.ckCep?.value||"").trim();
