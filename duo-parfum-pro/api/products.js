@@ -1,83 +1,10 @@
-const admin = require("firebase-admin");
+const { getFirebaseAdmin } = require("./_firebase-admin");
 
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS ||
   "guilhermeserraglio03@gmail.com,guilhermeserraglio@gmail.com")
   .split(",")
   .map((email) => email.trim().toLowerCase())
   .filter(Boolean);
-
-function normalizePrivateKey(key) {
-  if (!key) return undefined;
-  return key.replace(/\r/g, "").replace(/\\n/g, "\n");
-}
-
-function loadServiceAccountFromEnv() {
-  const rawJson = process.env.FIREBASE_SERVICE_ACCOUNT || "";
-  if (rawJson) {
-    try {
-      const parsed = JSON.parse(rawJson);
-      if (parsed.private_key && parsed.client_email && parsed.project_id) {
-        return {
-          projectId: parsed.project_id,
-          clientEmail: parsed.client_email,
-          privateKey: normalizePrivateKey(parsed.private_key),
-        };
-      }
-    } catch (err) {
-      console.error("⚠️ FIREBASE_SERVICE_ACCOUNT inválido:", err);
-    }
-  }
-
-  const base64Json =
-    process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 ||
-    process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 ||
-    "";
-  if (base64Json) {
-    try {
-      const decoded = Buffer.from(base64Json, "base64").toString("utf8");
-      const parsed = JSON.parse(decoded);
-      if (parsed.private_key && parsed.client_email && parsed.project_id) {
-        return {
-          projectId: parsed.project_id,
-          clientEmail: parsed.client_email,
-          privateKey: normalizePrivateKey(parsed.private_key),
-        };
-      }
-    } catch (err) {
-      console.error("⚠️ FIREBASE_SERVICE_ACCOUNT_BASE64 inválido:", err);
-    }
-  }
-
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
-
-  if (projectId && clientEmail && privateKey) {
-    return { projectId, clientEmail, privateKey };
-  }
-
-  return null;
-}
-
-function initializeFirebaseAdmin() {
-  if (admin.apps.length) return;
-
-  const credentials = loadServiceAccountFromEnv();
-
-  if (!credentials) {
-    throw new Error(
-      "⚠️ Credenciais do Firebase Admin não configuradas. Defina FIREBASE_SERVICE_ACCOUNT (JSON), FIREBASE_SERVICE_ACCOUNT_BASE64 ou as variáveis FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL e FIREBASE_PRIVATE_KEY."
-    );
-  }
-
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: credentials.projectId,
-      clientEmail: credentials.clientEmail,
-      privateKey: credentials.privateKey,
-    }),
-  });
-}
 
 function parseBody(body) {
   if (!body) return {};
@@ -92,7 +19,7 @@ function parseBody(body) {
   return body;
 }
 
-async function authenticateRequest(req) {
+async function authenticateRequest(req, admin) {
   const authHeader = req.headers?.authorization || "";
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
 
@@ -144,8 +71,9 @@ function sanitizeString(value) {
 }
 
 module.exports = async function handler(req, res) {
+  let admin;
   try {
-    initializeFirebaseAdmin();
+    admin = getFirebaseAdmin();
   } catch (err) {
     console.error("❌ Erro ao inicializar Firebase Admin:", err);
     return res.status(500).json({ error: "Configuração do servidor indisponível" });
@@ -164,7 +92,7 @@ module.exports = async function handler(req, res) {
 
   let user;
   try {
-    user = await authenticateRequest(req);
+    user = await authenticateRequest(req, admin);
     console.log("👤 Requisição autenticada para:", user.email, "Método:", req.method);
   } catch (err) {
     console.error("❌ Erro de autenticação:", err.message);
