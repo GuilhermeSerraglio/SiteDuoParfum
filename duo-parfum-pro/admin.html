@@ -51,6 +51,32 @@
 
     <hr style="margin:30px 0">
 
+    <!-- Banner -->
+    <section>
+      <h3>Banner de destaques</h3>
+      <p class="muted" style="margin-bottom:12px">Cadastre aqui as imagens que serão exibidas no banner rotativo da página inicial.</p>
+      <form id="heroForm" class="row wrap gap" style="margin-bottom:14px">
+        <input id="heroTitle" class="input" placeholder="Título" required>
+        <input id="heroTag" class="input" placeholder="Etiqueta (ex: Lançamento)">
+        <input id="heroOrder" class="input" type="number" step="1" min="0" placeholder="Ordem">
+        <input id="heroAlt" class="input" placeholder="Texto alternativo da imagem">
+        <textarea id="heroDescription" class="input" placeholder="Descrição" rows="2" style="flex:1 1 100%"></textarea>
+        <label class="hero-form-checkbox" style="flex:1 1 200px">
+          <input id="heroActive" type="checkbox" checked>
+          <span>Visível no site</span>
+        </label>
+        <input id="heroImage" type="file" accept="image/*" class="input" style="flex:1 1 260px">
+        <div class="row gap">
+          <button type="submit" class="btn" id="btnSaveHero">Salvar banner</button>
+          <button type="button" class="btn ghost" id="btnCancelHeroEdit" style="display:none">Cancelar edição</button>
+        </div>
+      </form>
+
+      <div id="heroList" class="grid"></div>
+    </section>
+
+    <hr style="margin:30px 0">
+
     <!-- Pedidos -->
     <section>
       <h3>Pedidos</h3>
@@ -115,6 +141,17 @@
         btnSubmit: document.getElementById("btnSubmitProduct"),
         btnCancelEdit: document.getElementById("btnCancelEdit"),
         productList: document.getElementById("productList"),
+        heroForm: document.getElementById("heroForm"),
+        heroTitle: document.getElementById("heroTitle"),
+        heroTag: document.getElementById("heroTag"),
+        heroOrder: document.getElementById("heroOrder"),
+        heroAlt: document.getElementById("heroAlt"),
+        heroDescription: document.getElementById("heroDescription"),
+        heroActive: document.getElementById("heroActive"),
+        heroImage: document.getElementById("heroImage"),
+        heroList: document.getElementById("heroList"),
+        btnSaveHero: document.getElementById("btnSaveHero"),
+        btnCancelHeroEdit: document.getElementById("btnCancelHeroEdit"),
         orderList: document.getElementById("orderList"),
         btnLogout: document.getElementById("btnLogout")
       };
@@ -132,6 +169,11 @@
         currentImageUrl: ""
       };
 
+      const heroFormState = {
+        editingHeroId: null,
+        currentImageUrl: ""
+      };
+
       const formatCurrency = (value) => {
         const amount = Number(value) || 0;
         return amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -141,6 +183,11 @@
         value
           .toString()
           .replace(/[&<>"']/g, (match) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[match]));
+
+      const sanitizeImage = (value = "") => {
+        const trimmed = typeof value === "string" ? value.trim() : "";
+        return trimmed || "https://picsum.photos/seed/duoparfum/600/400";
+      };
 
       const sanitizeTrackingCode = (code = "") =>
         code.toString().toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -445,6 +492,229 @@ auth.onAuthStateChanged(user => {
         els.pName.focus();
         window.scrollTo({ top: 0, behavior: "smooth" });
       };
+
+      /* ==== Banner ==== */
+      const heroCache = new Map();
+
+      function resetHeroForm() {
+        heroFormState.editingHeroId = null;
+        heroFormState.currentImageUrl = "";
+
+        if (els.heroForm) {
+          els.heroForm.reset();
+        }
+        if (els.heroActive) {
+          els.heroActive.checked = true;
+        }
+        if (els.heroImage) {
+          els.heroImage.value = "";
+        }
+        if (els.btnSaveHero) {
+          els.btnSaveHero.textContent = "Salvar banner";
+        }
+        if (els.btnCancelHeroEdit) {
+          els.btnCancelHeroEdit.style.display = "none";
+        }
+      }
+
+      if (els.btnCancelHeroEdit) {
+        els.btnCancelHeroEdit.addEventListener("click", resetHeroForm);
+      }
+
+      if (els.heroForm) {
+        els.heroForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+
+          const isEditing = Boolean(heroFormState.editingHeroId);
+          const file = els.heroImage?.files?.[0];
+          let imageUrl = heroFormState.currentImageUrl || "";
+
+          if (!isEditing && !file) {
+            alert("Envie uma imagem para o banner.");
+            return;
+          }
+
+          try {
+            if (file) {
+              const ref = storage.ref("hero-banners/" + Date.now() + "-" + file.name);
+              await ref.put(file);
+              imageUrl = await ref.getDownloadURL();
+              heroFormState.currentImageUrl = imageUrl;
+            }
+
+            if (!imageUrl) {
+              alert("Não foi possível obter a imagem do banner.");
+              return;
+            }
+
+            const orderValue = Number.parseInt(els.heroOrder?.value, 10);
+            const payload = {
+              title: els.heroTitle?.value?.trim() || "",
+              description: els.heroDescription?.value?.trim() || "",
+              tag: els.heroTag?.value?.trim() || "",
+              alt: els.heroAlt?.value?.trim() || "",
+              image: imageUrl,
+              active: Boolean(els.heroActive?.checked)
+            };
+
+            if (Number.isFinite(orderValue)) {
+              payload.order = orderValue;
+            } else if (isEditing) {
+              payload.order = firebase.firestore.FieldValue.delete();
+            }
+
+            if (isEditing) {
+              await db.collection("heroSlides").doc(heroFormState.editingHeroId).update(payload);
+            } else {
+              await db.collection("heroSlides").add({
+                ...payload,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+            }
+
+            resetHeroForm();
+            loadHeroBanners();
+          } catch (err) {
+            console.error(isEditing ? "Erro ao atualizar banner:" : "Erro ao salvar banner:", err);
+            alert("Não foi possível salvar o banner.");
+          }
+        });
+      }
+
+      async function loadHeroBanners() {
+        if (!els.heroList) return;
+
+        els.heroList.innerHTML = "<div class='muted'>Carregando banners...</div>";
+        heroCache.clear();
+
+        try {
+          const snap = await db.collection("heroSlides").get();
+          const banners = [];
+          snap.forEach(doc => {
+            const data = doc.data() || {};
+            const hasOrder = typeof data.order === "number" && Number.isFinite(data.order);
+            const orderValue = hasOrder ? data.order : Number.MAX_SAFE_INTEGER;
+            const createdAt = typeof data.createdAt?.toDate === "function" ? data.createdAt.toDate() : null;
+            banners.push({
+              id: doc.id,
+              data,
+              order: orderValue,
+              createdAt
+            });
+            heroCache.set(doc.id, {
+              id: doc.id,
+              title: data.title || "",
+              description: data.description || "",
+              tag: data.tag || "",
+              alt: data.alt || "",
+              image: data.image || "",
+              order: hasOrder ? data.order : "",
+              active: data.active !== false
+            });
+          });
+
+          banners.sort((a, b) => {
+            if (a.order !== b.order) return a.order - b.order;
+            const timeA = a.createdAt ? a.createdAt.getTime() : 0;
+            const timeB = b.createdAt ? b.createdAt.getTime() : 0;
+            return timeA - timeB;
+          });
+
+          if (!banners.length) {
+            els.heroList.innerHTML = '<div class="muted">Nenhum banner cadastrado ainda.</div>';
+            return;
+          }
+
+          els.heroList.innerHTML = "";
+
+          banners.forEach(({ id, data }) => {
+            const card = document.createElement("article");
+            const isActive = data.active !== false;
+            const hasOrder = typeof data.order === "number" && Number.isFinite(data.order);
+            card.className = `admin-hero-card${isActive ? "" : " is-inactive"}`;
+            const orderLabel = hasOrder ? data.order : "-";
+            const altText = data.alt || data.title || "Banner";
+
+            card.innerHTML = `
+              <div class="admin-hero-thumb-wrap">
+                <img class="admin-hero-thumb" src="${sanitizeImage(data.image)}" alt="${escapeHtml(altText)}">
+              </div>
+              <div class="admin-hero-info">
+                <div class="admin-hero-title">${escapeHtml(data.title || "Sem título")}</div>
+                ${data.description ? `<p class="admin-hero-description">${escapeHtml(data.description)}</p>` : ""}
+                <div class="admin-hero-meta">
+                  ${data.tag ? `<span class="admin-hero-tag">${escapeHtml(data.tag)}</span>` : ""}
+                  <span class="admin-hero-order">Ordem: ${escapeHtml(orderLabel.toString())}</span>
+                  <span class="admin-hero-status ${isActive ? "is-on" : "is-off"}">${isActive ? "Visível" : "Oculto"}</span>
+                </div>
+              </div>
+              <div class="admin-hero-actions">
+                <button class="btn small ghost" onclick="editHeroSlide('${id}')">Editar</button>
+                <button class="btn small ghost" onclick="toggleHeroVisibility('${id}', ${isActive ? "false" : "true"})">${isActive ? "Ocultar" : "Ativar"}</button>
+                <button class="btn small ghost danger" onclick="deleteHeroSlide('${id}')">Excluir</button>
+              </div>
+            `;
+
+            els.heroList.appendChild(card);
+          });
+        } catch (err) {
+          console.error("Erro ao carregar banners:", err);
+          els.heroList.innerHTML = '<div class="muted">Erro ao carregar banners.</div>';
+        }
+      }
+
+      window.editHeroSlide = (id) => {
+        const slide = heroCache.get(id);
+        if (!slide) {
+          alert("Banner não encontrado.");
+          return;
+        }
+
+        heroFormState.editingHeroId = slide.id;
+        heroFormState.currentImageUrl = slide.image || "";
+
+        if (els.heroTitle) els.heroTitle.value = slide.title || "";
+        if (els.heroTag) els.heroTag.value = slide.tag || "";
+        if (els.heroOrder) els.heroOrder.value = slide.order !== "" ? slide.order : "";
+        if (els.heroAlt) els.heroAlt.value = slide.alt || "";
+        if (els.heroDescription) els.heroDescription.value = slide.description || "";
+        if (els.heroActive) els.heroActive.checked = slide.active !== false;
+        if (els.heroImage) els.heroImage.value = "";
+        if (els.btnSaveHero) els.btnSaveHero.textContent = "Atualizar banner";
+        if (els.btnCancelHeroEdit) els.btnCancelHeroEdit.style.display = "inline-flex";
+
+        window.scrollTo({ top: els.heroForm?.offsetTop || 0, behavior: "smooth" });
+        els.heroTitle?.focus();
+      };
+
+      window.toggleHeroVisibility = async (id, shouldActivate) => {
+        try {
+          await db.collection("heroSlides").doc(id).update({ active: Boolean(shouldActivate) });
+          loadHeroBanners();
+        } catch (err) {
+          console.error("Erro ao atualizar visibilidade do banner:", err);
+          alert("Não foi possível alterar a visibilidade.");
+        }
+      };
+
+      window.deleteHeroSlide = async (id) => {
+        if (!confirm("Excluir este banner?")) {
+          return;
+        }
+
+        try {
+          await db.collection("heroSlides").doc(id).delete();
+          loadHeroBanners();
+          if (heroFormState.editingHeroId === id) {
+            resetHeroForm();
+          }
+        } catch (err) {
+          console.error("Erro ao excluir banner:", err);
+          alert("Não foi possível excluir o banner.");
+        }
+      };
+
+      loadHeroBanners();
 
       loadProducts();
 

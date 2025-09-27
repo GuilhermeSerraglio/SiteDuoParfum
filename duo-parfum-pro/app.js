@@ -114,6 +114,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   /* ==== State ==== */
   const state = window.__STATE = {
     products: [],
+    heroSlides: [],
     cart: loadCart(),
     selected: null,
     processingCheckout: false,
@@ -128,12 +129,183 @@ document.addEventListener("DOMContentLoaded", async () => {
   let orderDocs = new Map();
   let orderPendingKeys = new Set();
 
+  await loadHeroSlides();
+  renderHeroSlider();
+  setupHeroSlider();
+
   await loadProducts();
   renderProducts();
   updateCartUI();
   renderOrders();
 
   /* ==== Funções ==== */
+  let heroSliderCleanup = null;
+
+  async function loadHeroSlides() {
+    try {
+      const snap = await db.collection("heroSlides").get();
+      const slides = [];
+      snap.forEach(doc => {
+        const data = doc.data() || {};
+        if (data.active === false) return;
+        const hasOrder = typeof data.order === "number" && Number.isFinite(data.order);
+        const normalizedOrder = hasOrder ? data.order : Number.MAX_SAFE_INTEGER;
+        const createdAt = typeof data.createdAt?.toDate === "function" ? data.createdAt.toDate() : null;
+        slides.push({
+          id: doc.id,
+          title: data.title || "",
+          description: data.description || "",
+          tag: data.tag || "",
+          image: data.image || "",
+          alt: data.alt || "",
+          order: normalizedOrder,
+          createdAt
+        });
+      });
+
+      slides.sort((a, b) => {
+        if (a.order !== b.order) return a.order - b.order;
+        const timeA = a.createdAt ? a.createdAt.getTime() : 0;
+        const timeB = b.createdAt ? b.createdAt.getTime() : 0;
+        return timeA - timeB;
+      });
+
+      state.heroSlides = slides;
+    } catch (err) {
+      console.error("Erro ao carregar banners:", err);
+      state.heroSlides = [];
+    }
+  }
+
+  function renderHeroSlider() {
+    const root = document.querySelector(".hero-slider");
+    if (!root) return;
+
+    const track = root.querySelector(".hero-slider-track");
+    const dotsWrap = root.querySelector(".hero-slider-dots");
+    const emptyState = root.querySelector(".hero-slider-empty");
+    if (!track || !dotsWrap) return;
+
+    track.innerHTML = "";
+    dotsWrap.innerHTML = "";
+
+    const slides = state.heroSlides || [];
+    if (!slides.length) {
+      root.classList.add("hero-slider--empty");
+      root.setAttribute("aria-hidden", "true");
+      if (emptyState) emptyState.classList.remove("hidden");
+      return;
+    }
+
+    root.classList.remove("hero-slider--empty");
+    root.removeAttribute("aria-hidden");
+    if (emptyState) emptyState.classList.add("hidden");
+
+    slides.forEach((slide, index) => {
+      const figure = document.createElement("figure");
+      figure.className = "hero-slide";
+      if (index === 0) figure.classList.add("is-active");
+      const imageAlt = slide.alt || slide.title || "Produto em destaque";
+      figure.innerHTML = `
+        <img src="${sanitizeImg(slide.image)}" alt="${escapeHtml(imageAlt)}" loading="lazy">
+        <figcaption>
+          ${slide.tag ? `<span class="hero-slide-tag">${escapeHtml(slide.tag)}</span>` : ""}
+          ${slide.title ? `<h3>${escapeHtml(slide.title)}</h3>` : ""}
+          ${slide.description ? `<p>${escapeHtml(slide.description)}</p>` : ""}
+        </figcaption>
+      `;
+      track.appendChild(figure);
+
+      const dot = document.createElement("button");
+      dot.type = "button";
+      dot.className = "hero-slider-dot";
+      dot.dataset.slide = String(index);
+      dot.setAttribute("aria-label", `Ver destaque ${index + 1}`);
+      dot.setAttribute("aria-pressed", index === 0 ? "true" : "false");
+      if (index === 0) dot.classList.add("is-active");
+      dotsWrap.appendChild(dot);
+    });
+  }
+
+  function setupHeroSlider() {
+    const root = document.querySelector(".hero-slider");
+    if (!root) return;
+
+    if (typeof heroSliderCleanup === "function") {
+      heroSliderCleanup();
+      heroSliderCleanup = null;
+    }
+
+    const slides = Array.from(root.querySelectorAll(".hero-slide"));
+    const dots = Array.from(root.querySelectorAll(".hero-slider-dot"));
+    if (!slides.length || slides.length !== dots.length) return;
+
+    let activeIndex = slides.findIndex(slide => slide.classList.contains("is-active"));
+    activeIndex = activeIndex >= 0 ? activeIndex : 0;
+    let timerId = null;
+    const INTERVAL = 6000;
+
+    const setActive = index => {
+      const nextIndex = (index + slides.length) % slides.length;
+      activeIndex = nextIndex;
+      slides.forEach((slide, idx) => {
+        slide.classList.toggle("is-active", idx === nextIndex);
+      });
+      dots.forEach((dot, idx) => {
+        const isCurrent = idx === nextIndex;
+        dot.classList.toggle("is-active", isCurrent);
+        dot.setAttribute("aria-pressed", isCurrent ? "true" : "false");
+      });
+    };
+
+    const stop = () => {
+      if (timerId) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+    };
+
+    const start = () => {
+      stop();
+      timerId = setInterval(() => {
+        setActive(activeIndex + 1);
+      }, INTERVAL);
+    };
+
+    const dotHandlers = dots.map((dot, idx) => () => {
+      setActive(idx);
+      start();
+    });
+
+    dots.forEach((dot, idx) => {
+      dot.addEventListener("click", dotHandlers[idx]);
+    });
+
+    const handleMouseEnter = () => stop();
+    const handleMouseLeave = () => start();
+    const handleFocusIn = () => stop();
+    const handleFocusOut = () => start();
+
+    root.addEventListener("mouseenter", handleMouseEnter);
+    root.addEventListener("mouseleave", handleMouseLeave);
+    root.addEventListener("focusin", handleFocusIn);
+    root.addEventListener("focusout", handleFocusOut);
+
+    heroSliderCleanup = () => {
+      stop();
+      root.removeEventListener("mouseenter", handleMouseEnter);
+      root.removeEventListener("mouseleave", handleMouseLeave);
+      root.removeEventListener("focusin", handleFocusIn);
+      root.removeEventListener("focusout", handleFocusOut);
+      dots.forEach((dot, idx) => {
+        dot.removeEventListener("click", dotHandlers[idx]);
+      });
+    };
+
+    setActive(activeIndex);
+    start();
+  }
+
   async function loadProducts(){
     try {
       const snap = await db.collection("products").orderBy("createdAt","desc").get();
