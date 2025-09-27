@@ -23,7 +23,7 @@
    - `FIREBASE_SERVICE_ACCOUNT`: JSON completo do serviço (cole o conteúdo do arquivo gerado pelo Firebase).
    - `FIREBASE_SERVICE_ACCOUNT_BASE64`: mesmo JSON acima, porém convertido para Base64.
    - `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL` e `FIREBASE_PRIVATE_KEY` separados (no caso da chave privada, substitua as quebras de linha por `\n`).
-5. Configure as variáveis `MP_ACCESS_TOKEN`, `MP_PAYER_EMAIL` (opcional) e `MP_NOTIFICATION_URL` (opcional) na Vercel para gerar pagamentos.
+5. Configure as variáveis `MP_ACCESS_TOKEN`, `MP_PAYER_EMAIL` (opcional) e `MP_NOTIFICATION_URL` (opcional) na Vercel para gerar pagamentos. Defina `MP_NOTIFICATION_URL` apontando para `https://SEU-DOMINIO/api/payment-status` para que o status seja atualizado automaticamente quando o Mercado Pago enviar a notificação.
 6. Deploy na Vercel (arraste esta pasta).
 
 Gerado em 2025-08-10

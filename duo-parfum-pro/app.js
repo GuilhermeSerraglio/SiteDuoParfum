@@ -15,7 +15,7 @@ const ORDER_STATUS = {
   pending: { key: "pending", label: "Pendente", className: "is-pending", description: "Aguardando confirmação de pagamento" },
   paid: { key: "paid", label: "Pago", className: "is-paid", description: "Pagamento confirmado" },
   sent: { key: "sent", label: "Enviado", className: "is-sent", description: "Pedido enviado para entrega" },
-  canceled: { key: "canceled", label: "Cancelado", className: "is-canceled", description: "Pedido cancelado" }
+  canceled: { key: "canceled", label: "Cancelado", className: "is-canceled", description: "Pagamento cancelado ou não aprovado" }
 };
 /* =================================== */
 
@@ -48,10 +48,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (!logged) {
       cleanupOrderListeners();
+      stopCheckoutOrderListener();
       state.orders = [];
       state.orderTracking = {};
       state.ordersError = "";
       state.ordersLoading = false;
+      state.checkoutOrderId = "";
     }
 
     renderOrders();
@@ -122,13 +124,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     orders: [],
     orderTracking: {},
     ordersLoading: false,
-    ordersError: ""
+    ordersError: "",
+    checkoutOrderId: ""
   };
 
   let orderUnsubscribes = [];
   let orderDocSources = new Map();
   let orderDocs = new Map();
   let orderPendingKeys = new Set();
+  let checkoutOrderUnsubscribe = null;
 
   await loadProducts();
   renderProducts();
@@ -388,6 +392,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       updateCartUI();
       openDrawer(false);
       markCheckoutCompleted();
+      state.checkoutOrderId = orderId;
+      listenToCheckoutOrder(orderId);
       success=true;
     }catch(e){
       console.error(e);
@@ -397,6 +403,81 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     }finally{
       if(!success) setCheckoutProcessing(false);
+    }
+  }
+
+  function listenToCheckoutOrder(orderId){
+    stopCheckoutOrderListener();
+    if(!orderId||!db){
+      renderCheckoutPaymentStatusError("Não foi possível monitorar o status do pagamento automaticamente. Consulte a área de pedidos para mais detalhes.");
+      return;
+    }
+    state.checkoutOrderId=orderId;
+    renderCheckoutPaymentStatusBanner(ORDER_STATUS.pending);
+    try{
+      checkoutOrderUnsubscribe=db.collection("orders").doc(orderId).onSnapshot(doc=>{
+        if(!doc.exists) return;
+        const order=mapOrderDocument(doc);
+        applyCheckoutPaymentStatus(order);
+      },err=>{
+        console.error("Erro ao acompanhar status do pagamento:", err);
+        renderCheckoutPaymentStatusError("Não foi possível atualizar o status do pagamento automaticamente. Atualize a página para verificar novamente.");
+      });
+    }catch(err){
+      console.error("Erro ao iniciar acompanhamento do pagamento:", err);
+      renderCheckoutPaymentStatusError("Não foi possível monitorar o status do pagamento automaticamente. Atualize a página para acompanhar o pedido.");
+    }
+  }
+
+  function applyCheckoutPaymentStatus(order){
+    if(!order) return;
+    const statusInfo=getOrderStatusInfo(order.status);
+    renderCheckoutPaymentStatusBanner(statusInfo);
+    if(statusInfo.key===ORDER_STATUS.paid.key||statusInfo.key===ORDER_STATUS.canceled.key){
+      stopCheckoutOrderListener({preserveStatus:true});
+    }
+  }
+
+  function renderCheckoutPaymentStatusBanner(statusInfo){
+    if(!els.paymentArea||!statusInfo) return;
+    const classes=["payment-status-banner"];
+    if(statusInfo.className) classes.push(statusInfo.className);
+    const html=`<div class="${classes.join(" ")}" data-payment-status>
+      <strong>Status do pagamento</strong>
+      <span>${escapeHtml(statusInfo.description||"")}</span>
+    </div>`;
+    const existing=els.paymentArea.querySelector("[data-payment-status]");
+    if(existing){
+      existing.outerHTML=html;
+    }else{
+      els.paymentArea.insertAdjacentHTML("afterbegin",html);
+    }
+  }
+
+  function renderCheckoutPaymentStatusError(message){
+    if(!els.paymentArea) return;
+    const html=`<div class="payment-status-banner is-error" data-payment-status>
+      <strong>Status do pagamento</strong>
+      <span>${escapeHtml(message||"Não foi possível confirmar o status do pagamento automaticamente.")}</span>
+    </div>`;
+    const existing=els.paymentArea.querySelector("[data-payment-status]");
+    if(existing){
+      existing.outerHTML=html;
+    }else{
+      els.paymentArea.insertAdjacentHTML("afterbegin",html);
+    }
+  }
+
+  function stopCheckoutOrderListener(options={}){
+    const {preserveStatus=false}=options;
+    if(typeof checkoutOrderUnsubscribe==="function"){
+      try{ checkoutOrderUnsubscribe(); }catch(err){ console.warn("Falha ao remover listener de checkout:", err); }
+    }
+    checkoutOrderUnsubscribe=null;
+    state.checkoutOrderId="";
+    if(!preserveStatus&&els.paymentArea){
+      const banner=els.paymentArea.querySelector("[data-payment-status]");
+      if(banner) banner.remove();
     }
   }
 
@@ -422,6 +503,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       els.ckConfirm.disabled=false;
       els.ckConfirm.textContent="Gerar pagamento";
     }
+    stopCheckoutOrderListener();
     if(els.paymentArea) els.paymentArea.innerHTML="";
   }
 
