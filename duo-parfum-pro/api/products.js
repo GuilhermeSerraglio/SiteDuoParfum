@@ -122,6 +122,11 @@ async function authenticateRequest(req) {
   }
 
   const email = (decoded?.email || "").toLowerCase();
+
+  // 🔍 Logs de debug
+  console.log("DEBUG - Email decodificado:", email);
+  console.log("DEBUG - Lista de admins:", ADMIN_EMAILS);
+
   if (!email || !ADMIN_EMAILS.includes(email)) {
     const error = new Error("Usuário não autorizado");
     error.status = 403;
@@ -166,6 +171,7 @@ module.exports = async function handler(req, res) {
 
   const payload = parseBody(req.body);
 
+  /* ==== CRIAR PRODUTO ==== */
   if (req.method === "POST") {
     const name = sanitizeString(payload.name);
     const brand = sanitizeString(payload.brand);
@@ -207,48 +213,12 @@ module.exports = async function handler(req, res) {
     }
   }
 
+  /* ==== ATUALIZAR PRODUTO ==== */
   if (req.method === "PATCH") {
     const id = sanitizeString(payload.id);
 
     if (!id) {
       return res.status(400).json({ error: "ID do produto é obrigatório" });
-    }
-
-    const hasDelta = Object.prototype.hasOwnProperty.call(payload, "delta");
-
-    if (hasDelta) {
-      const deltaValue = Number(payload.delta);
-      if (!Number.isFinite(deltaValue)) {
-        return res.status(400).json({ error: "Variação de estoque inválida" });
-      }
-
-      const ref = db.collection("products").doc(id);
-
-      try {
-        let newStock = 0;
-        await db.runTransaction(async (transaction) => {
-          const snap = await transaction.get(ref);
-          if (!snap.exists) {
-            const error = new Error("Produto não encontrado");
-            error.status = 404;
-            throw error;
-          }
-          const currentStock = Number(snap.data()?.stock) || 0;
-          newStock = Math.max(currentStock + deltaValue, 0);
-          transaction.update(ref, {
-            stock: newStock,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedBy: user.email,
-          });
-        });
-        return res.status(200).json({ id, stock: newStock });
-      } catch (err) {
-        if (err.status === 404) {
-          return res.status(404).json({ error: err.message });
-        }
-        console.error("Erro ao atualizar estoque:", err);
-        return res.status(500).json({ error: "Falha ao atualizar estoque" });
-      }
     }
 
     const ref = db.collection("products").doc(id);
@@ -294,8 +264,7 @@ module.exports = async function handler(req, res) {
       updates.price = Math.round(priceValue * 100) / 100;
     }
 
-    const fieldsToUpdate = Object.keys(updates);
-    if (!fieldsToUpdate.length) {
+    if (!Object.keys(updates).length) {
       return res.status(400).json({ error: "Nenhum dado para atualizar" });
     }
 
@@ -316,6 +285,7 @@ module.exports = async function handler(req, res) {
     }
   }
 
+  /* ==== DELETAR PRODUTO ==== */
   if (req.method === "DELETE") {
     const id = sanitizeString(payload.id);
     if (!id) {
