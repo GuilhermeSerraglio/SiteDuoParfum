@@ -42,7 +42,7 @@
 
   <!-- Hero -->
   <section class="hero" id="home">
-    <div class="container">
+    <div class="container hero-layout">
       <div class="hero-content">
         <span class="hero-badge">Elegância em cada nota</span>
         <h1>Perfumes que contam sua história</h1>
@@ -50,6 +50,55 @@
         <div class="hero-actions">
           <a href="#catalogo" class="btn">Explorar catálogo</a>
           <a href="#catalogo" class="btn ghost">Conheça os destaques</a>
+        </div>
+      </div>
+
+      <div class="hero-slider" aria-label="Produtos em destaque">
+        <div class="hero-slider-track">
+          <figure class="hero-slide is-active">
+            <img
+              src="https://images.unsplash.com/photo-1612817288484-6f916006741a?auto=format&fit=crop&w=980&q=80"
+              alt="Frasco de perfume dourado com embalagem elegante"
+              loading="lazy"
+            />
+            <figcaption>
+              <span class="hero-slide-tag">Lançamento</span>
+              <h3>Montale Intense Café</h3>
+              <p>Âmbar gourmand envolvente com toque de café e rosa para noites especiais.</p>
+            </figcaption>
+          </figure>
+
+          <figure class="hero-slide">
+            <img
+              src="https://images.unsplash.com/photo-1612817287865-30c8c8ff9e70?auto=format&fit=crop&w=980&q=80"
+              alt="Perfume lilás apoiado em fundo em tons pastel"
+              loading="lazy"
+            />
+            <figcaption>
+              <span class="hero-slide-tag">Favorito</span>
+              <h3>Guerlain Mon Guerlain</h3>
+              <p>Lavanda francesa, baunilha e jasmin que traduzem delicadeza e sofisticação.</p>
+            </figcaption>
+          </figure>
+
+          <figure class="hero-slide">
+            <img
+              src="https://images.unsplash.com/photo-1585386959984-a4155224a1ad?auto=format&fit=crop&w=980&q=80"
+              alt="Coleção de frascos de perfume minimalistas em mesa de mármore"
+              loading="lazy"
+            />
+            <figcaption>
+              <span class="hero-slide-tag">Exclusivo</span>
+              <h3>Tom Ford Lost Cherry</h3>
+              <p>Cereja negra licorosa com amêndoa e madeiras cremosas para um toque ousado.</p>
+            </figcaption>
+          </figure>
+        </div>
+
+        <div class="hero-slider-dots" role="tablist" aria-label="Selecionar produto em destaque">
+          <button class="hero-slider-dot is-active" type="button" data-slide="0" aria-label="Ver destaque 1" aria-pressed="true"></button>
+          <button class="hero-slider-dot" type="button" data-slide="1" aria-label="Ver destaque 2" aria-pressed="false"></button>
+          <button class="hero-slider-dot" type="button" data-slide="2" aria-label="Ver destaque 3" aria-pressed="false"></button>
         </div>
       </div>
     </div>

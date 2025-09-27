@@ -36,6 +36,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (els.year) els.year.textContent = new Date().getFullYear();
 
+  initHeroSlider();
+
   /* ==== Auth ==== */
   auth.onAuthStateChanged(user => {
     const logged = !!user;
@@ -134,6 +136,63 @@ document.addEventListener("DOMContentLoaded", async () => {
   renderOrders();
 
   /* ==== Funções ==== */
+  function initHeroSlider() {
+    const root = document.querySelector(".hero-slider");
+    if (!root) return;
+
+    const slides = Array.from(root.querySelectorAll(".hero-slide"));
+    const dots = Array.from(root.querySelectorAll(".hero-slider-dot"));
+
+    if (!slides.length || slides.length !== dots.length) return;
+
+    let activeIndex = slides.findIndex(slide => slide.classList.contains("is-active"));
+    activeIndex = activeIndex >= 0 ? activeIndex : 0;
+    let timerId = null;
+    const INTERVAL = 6000;
+
+    const setActive = index => {
+      const nextIndex = (index + slides.length) % slides.length;
+      activeIndex = nextIndex;
+      slides.forEach((slide, idx) => {
+        slide.classList.toggle("is-active", idx === nextIndex);
+      });
+      dots.forEach((dot, idx) => {
+        const isCurrent = idx === nextIndex;
+        dot.classList.toggle("is-active", isCurrent);
+        dot.setAttribute("aria-pressed", isCurrent ? "true" : "false");
+      });
+    };
+
+    const stop = () => {
+      if (timerId) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+    };
+
+    const start = () => {
+      stop();
+      timerId = setInterval(() => {
+        setActive(activeIndex + 1);
+      }, INTERVAL);
+    };
+
+    dots.forEach((dot, idx) => {
+      dot.addEventListener("click", () => {
+        setActive(idx);
+        start();
+      });
+    });
+
+    root.addEventListener("mouseenter", stop);
+    root.addEventListener("mouseleave", start);
+    root.addEventListener("focusin", stop);
+    root.addEventListener("focusout", start);
+
+    setActive(activeIndex);
+    start();
+  }
+
   async function loadProducts(){
     try {
       const snap = await db.collection("products").orderBy("createdAt","desc").get();
