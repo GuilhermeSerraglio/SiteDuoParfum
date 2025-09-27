@@ -474,17 +474,51 @@ auth.onAuthStateChanged(user => {
             })
             .join("");
 
-          const trackingCode = sanitizeTrackingCode(data.trackingCode || data.shipping?.trackingCode || "");
+          const shipping = typeof data.shipping === "object" && data.shipping ? data.shipping : {};
+          const shippingMethod = (shipping.method || data.customer?.shippingMethod || "").toString().toLowerCase();
+          const shippingCost = Number(shipping.cost);
+          const shippingService = (shipping.service || "Correios").toString().trim();
+          const shippingEstimate = shipping.deliveryEstimate || "";
+          const shippingParts = [];
+          if (shippingMethod === "pickup") {
+            shippingParts.push("Retirada no local");
+            if (shipping.instructions) {
+              shippingParts.push(escapeHtml(shipping.instructions));
+            }
+          } else {
+            const serviceLabel = shippingService && shippingService.toLowerCase() !== "correios"
+              ? `Correios — ${escapeHtml(shippingService)}`
+              : "Correios";
+            shippingParts.push(serviceLabel);
+            if (Number.isFinite(shippingCost) && shippingCost > 0) {
+              shippingParts.push(formatCurrency(shippingCost));
+            }
+            if (shippingEstimate) {
+              shippingParts.push(escapeHtml(shippingEstimate));
+            }
+          }
+          const shippingSummary = shippingParts.join(" • ");
+
+          const trackingCode = sanitizeTrackingCode(data.trackingCode || shipping?.trackingCode || "");
           const contactLine = [data.customer?.email, data.customer?.phone].filter(Boolean).join(" · ");
-          const addressLine = [data.customer?.cep, data.customer?.address, data.customer?.city, data.customer?.state]
-            .filter(Boolean)
-            .join(" · ");
+          const addressLine = shippingMethod === "pickup"
+            ? "Retirada no local"
+            : [shipping?.cep || data.customer?.cep, data.customer?.address, data.customer?.city, data.customer?.state]
+                .filter(Boolean)
+                .join(" · ");
           const createdAt = typeof data.createdAt?.toDate === "function" ? data.createdAt.toDate() : null;
           const createdAtLine = createdAt ? `Realizado em ${createdAt.toLocaleString("pt-BR")}` : "";
           const metaLines = [contactLine, addressLine, createdAtLine]
             .filter(Boolean)
             .map(line => `<p class="order-card__meta-line">${escapeHtml(line)}</p>`)
             .join("");
+
+          const trackingGeneratedAt = typeof shipping?.trackingGeneratedAt?.toDate === "function"
+            ? shipping.trackingGeneratedAt.toDate()
+            : null;
+          const trackingGeneratedNote = trackingGeneratedAt
+            ? `<span class="order-card__meta-line muted">${escapeHtml(shipping?.trackingGeneratedBy === "automatic" ? "Gerado automaticamente" : "Atualizado")} em ${escapeHtml(trackingGeneratedAt.toLocaleString("pt-BR"))}</span>`
+            : "";
 
           const trackingHtml = `
             <div class="order-card__tracking-admin">
@@ -494,6 +528,7 @@ auth.onAuthStateChanged(user => {
                 <button class="btn small ghost" onclick="saveTracking('${doc.id}')">Salvar</button>
                 ${trackingCode ? `<a class="btn small ghost" href="https://rastreamento.correios.com.br/app/index.php?codigo=${trackingCode}" target="_blank" rel="noreferrer">Ver no Correios</a>` : ""}
               </div>
+              ${trackingGeneratedNote}
             </div>`;
 
           const statusButtons = [
@@ -523,6 +558,10 @@ auth.onAuthStateChanged(user => {
                 <div>
                   <span class="order-card__label">Pagamento</span>
                   <span class="order-card__value">${escapeHtml(data.customer?.payment || "Não informado")}</span>
+                </div>
+                <div>
+                  <span class="order-card__label">Entrega</span>
+                  <span class="order-card__value">${shippingSummary || "Em confirmação"}</span>
                 </div>
                 <div>
                   <span class="order-card__label">Total</span>
@@ -567,8 +606,18 @@ auth.onAuthStateChanged(user => {
         input.value = sanitized;
 
         const updatePayload = sanitized
-          ? { trackingCode: sanitized }
-          : { trackingCode: firebase.firestore.FieldValue.delete() };
+          ? {
+              trackingCode: sanitized,
+              "shipping.trackingCode": sanitized,
+              "shipping.trackingGeneratedAt": firebase.firestore.FieldValue.serverTimestamp(),
+              "shipping.trackingGeneratedBy": "manual"
+            }
+          : {
+              trackingCode: firebase.firestore.FieldValue.delete(),
+              "shipping.trackingCode": firebase.firestore.FieldValue.delete(),
+              "shipping.trackingGeneratedAt": firebase.firestore.FieldValue.delete(),
+              "shipping.trackingGeneratedBy": firebase.firestore.FieldValue.delete()
+            };
 
         try {
           await db.collection("orders").doc(id).update(updatePayload);

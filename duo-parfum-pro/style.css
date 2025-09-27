@@ -1058,6 +1058,125 @@ button:disabled {
   gap: 12px;
 }
 
+/* ===== Checkout & Shipping ===== */
+.checkout-shipping-block {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.checkout-section-title {
+  font-weight: 600;
+  color: var(--brand-darker);
+  font-size: 1.05rem;
+}
+
+.checkout-shipping-options {
+  display: grid;
+  gap: 12px;
+}
+
+.shipping-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(140, 91, 77, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.shipping-option input[type="radio"] {
+  margin-top: 4px;
+  accent-color: var(--brand-dark);
+}
+
+.shipping-option__content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shipping-option__content strong {
+  font-size: 0.95rem;
+  color: var(--brand-text);
+}
+
+.shipping-option__content span {
+  font-size: 0.82rem;
+  color: var(--brand-muted);
+}
+
+.shipping-option.is-active {
+  border-color: var(--brand-medium);
+  background: var(--brand-white);
+  box-shadow: var(--shadow-soft);
+}
+
+.shipping-calc {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px dashed rgba(140, 91, 77, 0.25);
+  background: rgba(252, 247, 243, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.shipping-calc__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.shipping-summary {
+  font-size: 0.85rem;
+  color: var(--brand-muted);
+}
+
+.checkout-totals {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: var(--brand-white);
+  border: 1px solid rgba(140, 91, 77, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.checkout-totals__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.95rem;
+  color: var(--brand-text);
+}
+
+.checkout-totals__divider {
+  height: 1px;
+  background: rgba(140, 91, 77, 0.18);
+  margin: 4px 0;
+}
+
+.checkout-totals__total strong {
+  font-size: 1.1rem;
+  color: var(--brand-darker);
+}
+
+.text-small {
+  font-size: 0.82rem;
+}
+
+.error-text {
+  color: #c65d4f;
+  font-weight: 600;
+}
+
 dialog::backdrop {
   background: rgba(45, 29, 23, 0.35);
 }

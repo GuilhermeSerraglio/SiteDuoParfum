@@ -31,12 +31,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     "btnCart","cartDrawer","closeCart","cartItems","cartTotal","cartCount","btnCheckout",
     "btnLogin","btnLogout","linkAdmin","linkOrders","ordersSection","ordersList","ordersEmpty","ordersLoading","ordersGuest","ordersError",
     "productModal","pmImg","pmName","pmBrand","pmNotes","pmPrice","pmMl","pmAdd","pmFav","closeModal",
-    "checkoutModal","closeCheckout","ckName","ckEmail","ckCep","ckAddress","ckPayment","ckConfirm","paymentArea","year"
+    "checkoutModal","closeCheckout","ckName","ckEmail","ckCep","ckAddress","ckPayment","ckCalcShipping","ckShippingCorreiosArea","ckShippingSummary","ckTotals","ckConfirm","paymentArea","year"
   ]);
 
   if (els.year) els.year.textContent = new Date().getFullYear();
 
   initHeroSlider();
+
+  let shippingOptionEls = [];
+  let shippingRadioEls = [];
 
   /* ==== Auth ==== */
   auth.onAuthStateChanged(user => {
@@ -125,8 +128,39 @@ document.addEventListener("DOMContentLoaded", async () => {
     orderTracking: {},
     ordersLoading: false,
     ordersError: "",
-    checkoutOrderId: ""
+    checkoutOrderId: "",
+    checkoutShipping: {
+      method: "correios",
+      service: "Correios",
+      cost: 0,
+      calculated: false,
+      deliveryEstimate: "",
+      currency: "BRL",
+      summary: "",
+      lastCep: "",
+      cartSignature: "",
+      needsRecalculation: false,
+      calculatedAt: null,
+      days: null
+    }
   };
+
+  shippingOptionEls = Array.from(document.querySelectorAll("[data-shipping-option]"));
+  shippingRadioEls = shippingOptionEls
+    .map(option => option.querySelector("input[type=\"radio\"]"))
+    .filter(Boolean);
+
+  shippingRadioEls.forEach(input => {
+    input.addEventListener("change", () => setCheckoutShippingMethod(input.value));
+  });
+
+  if (els.ckCalcShipping) {
+    els.ckCalcShipping.addEventListener("click", handleCalculateShipping);
+  }
+
+  state.checkoutShipping.cartSignature = computeCartSignature();
+  const initialShipping = shippingRadioEls.find(r => r.checked)?.value || state.checkoutShipping.method || "correios";
+  setCheckoutShippingMethod(initialShipping, { updateRadio: true, forceReset: true });
 
   let orderUnsubscribes = [];
   let orderDocSources = new Map();
@@ -323,30 +357,83 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     if (els.cartTotal) els.cartTotal.textContent=formatBRL(total);
     if (els.cartCount) els.cartCount.textContent=count;
+    syncCheckoutShippingAfterCartChange();
   }
 
   async function confirmCheckout(){
     if(state.processingCheckout) return;
     const name=(els.ckName?.value||"").trim();
     const email=(els.ckEmail?.value||"").trim().toLowerCase();
-    const cep=(els.ckCep?.value||"").trim();
+    const cepInput=(els.ckCep?.value||"").trim();
+    const sanitizedCep=sanitizeCep(cepInput);
     const address=(els.ckAddress?.value||"").trim();
     const payment=els.ckPayment?.value;
-    if(!name||!email||!cep||!address){ alert("Preencha todos os campos."); return; }
+    const shippingMethod=sanitizeShippingMethod(state.checkoutShipping?.method);
+    const requiresAddress=shippingMethod==="correios";
+
+    if(!name||!email){ alert("Preencha nome e e-mail para continuar."); return; }
     if(!isValidEmail(email)){ alert("Informe um e-mail válido."); return; }
+    if(requiresAddress){
+      if(!sanitizedCep||sanitizedCep.length!==8){ alert("Informe um CEP válido para entrega pelos Correios."); return; }
+      if(!address){ alert("Informe o endereço completo para entrega."); return; }
+    }
     if(!state.cart.length){ alert("Carrinho vazio."); return; }
+
+    if(shippingMethod==="correios"){
+      const shippingState=state.checkoutShipping||{};
+      if(!shippingState.calculated){ alert("Calcule o frete dos Correios antes de finalizar o pedido."); return; }
+      if(sanitizedCep&&shippingState.lastCep&&shippingState.lastCep!==sanitizedCep){
+        alert("Recalcule o frete para o CEP informado antes de continuar.");
+        return;
+      }
+      if(!shippingState.lastCep||shippingState.lastCep.length!==8){
+        alert("Calcule o frete dos Correios para o CEP informado antes de continuar.");
+        return;
+      }
+    }
 
     setCheckoutProcessing(true);
     if (els.paymentArea) els.paymentArea.innerHTML="<p class=\"muted\">Gerando pagamento...</p>";
 
-    const total=state.cart.reduce((s,i)=>s+i.price*i.qty,0);
+    const subtotal=getCheckoutSubtotal();
+    const shippingState=state.checkoutShipping||{};
+    const shippingCost=shippingMethod==="correios"&&shippingState.calculated?Math.max(0,Number(shippingState.cost)||0):0;
+    const total=subtotal+shippingCost;
+
+    const shippingDetails={
+      method:shippingMethod,
+      methodLabel:shippingMethod==="pickup"?"Retirada no local":"Entrega pelos Correios",
+      service:shippingMethod==="pickup"?"Retirada":(shippingState.service||"Correios"),
+      cost:shippingCost,
+      currency:shippingState.currency||"BRL",
+      deliveryEstimate:shippingMethod==="pickup"
+        ?"Disponível para retirada após confirmação do pagamento"
+        :(shippingState.deliveryEstimate||""),
+      deliveryDays:shippingMethod==="pickup"?null:(shippingState.days||null),
+      calculatedAt:shippingMethod==="pickup"
+        ?new Date()
+        :(shippingState.calculatedAt instanceof Date?shippingState.calculatedAt:new Date()),
+      cep:shippingMethod==="pickup"?"":(shippingState.lastCep||sanitizedCep),
+      instructions:shippingMethod==="pickup"?"Retire no estúdio Duo Parfum mediante agendamento após confirmação.":""
+    };
+
     const order={
       userId: auth.currentUser?.uid || null,
       items: state.cart.map(i=>({id:i.id,name:i.name,ml:i.ml||"",price:i.price,qty:i.qty})),
+      subtotal,
+      shipping: shippingDetails,
       total,
       createdAt:new Date(),
       status:"pending",
-      customer:{name,email,cep,address,payment}
+      customer:{
+        name,
+        email,
+        cep:sanitizedCep,
+        address,
+        payment,
+        shippingMethod,
+        deliveryMethod:shippingDetails.methodLabel
+      }
     };
 
     let orderId="";
@@ -386,7 +473,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       }else if(payment==="card"){
         if(els.paymentArea) els.paymentArea.innerHTML=`<a href="${data.link}" target="_blank" class="btn">Pagar com cartão</a>`;
       }
-      if (els.paymentArea) els.paymentArea.insertAdjacentHTML("beforeend","<p class=\"muted\" style=\"margin-top:12px\">Pedido registrado com sucesso. Utilize o pagamento acima para concluir sua compra.</p>");
+      if (els.paymentArea){
+        els.paymentArea.insertAdjacentHTML("beforeend","<p class=\"muted\" style=\"margin-top:12px\">Pedido registrado com sucesso. Utilize o pagamento acima para concluir sua compra.</p>");
+        const shippingInfoParts=[];
+        if(shippingMethod==="pickup"){
+          shippingInfoParts.push("Entrega: retirada no estúdio Duo Parfum após confirmação.");
+        }else{
+          shippingInfoParts.push(`Frete ${escapeHtml(shippingDetails.service||"Correios")}: ${formatBRL(shippingCost)}`);
+          if(shippingDetails.deliveryEstimate){
+            shippingInfoParts.push(escapeHtml(shippingDetails.deliveryEstimate));
+          }
+        }
+        if(shippingInfoParts.length){
+          els.paymentArea.insertAdjacentHTML("beforeend",`<p class=\"muted\" style=\"margin-top:6px\">${shippingInfoParts.join(" • ")}</p>`);
+        }
+      }
       state.cart=[];
       saveCart(state.cart);
       updateCartUI();
@@ -505,6 +606,254 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     stopCheckoutOrderListener();
     if(els.paymentArea) els.paymentArea.innerHTML="";
+    if(els.ckCalcShipping){
+      els.ckCalcShipping.disabled=false;
+      els.ckCalcShipping.textContent="Calcular frete";
+    }
+    if(els.ckShippingSummary){
+      els.ckShippingSummary.textContent="";
+      els.ckShippingSummary.classList.remove("error-text");
+    }
+    state.checkoutShipping={
+      method:"correios",
+      service:"Correios",
+      cost:0,
+      calculated:false,
+      deliveryEstimate:"",
+      currency:"BRL",
+      summary:"",
+      lastCep:"",
+      cartSignature:computeCartSignature(),
+      needsRecalculation:false,
+      calculatedAt:null,
+      days:null
+    };
+    setCheckoutShippingMethod("correios",{updateRadio:true,forceReset:true});
+  }
+
+  function setCheckoutShippingMethod(method,options={}){
+    const {updateRadio=false,forceReset=false}=options;
+    const normalized=sanitizeShippingMethod(method);
+    const prev=state.checkoutShipping||{};
+    const next={
+      ...prev,
+      method:normalized,
+      service:normalized==="pickup"?"Retirada":(prev.service||"Correios"),
+      currency:prev.currency||"BRL",
+      cartSignature:computeCartSignature()
+    };
+
+    if(normalized==="pickup"){
+      next.calculated=true;
+      next.needsRecalculation=false;
+      next.cost=0;
+      next.deliveryEstimate="";
+      next.deliveryDays=null;
+      next.lastCep="";
+      next.calculatedAt=new Date();
+    }else if(forceReset||prev.method!==normalized){
+      next.calculated=false;
+      next.needsRecalculation=false;
+      next.cost=0;
+      next.deliveryEstimate="";
+      next.deliveryDays=null;
+      next.lastCep="";
+      next.calculatedAt=null;
+    }
+
+    state.checkoutShipping=next;
+
+    if(shippingOptionEls.length){
+      shippingOptionEls.forEach(option=>{
+        const input=option.querySelector("input[type=\"radio\"]");
+        const isCurrent=input?.value===normalized;
+        if(updateRadio&&input){
+          input.checked=isCurrent;
+        }
+        option.classList.toggle("is-active",!!isCurrent);
+      });
+    }
+
+    updateCheckoutShippingUI();
+    renderCheckoutTotals();
+  }
+
+  async function handleCalculateShipping(){
+    if(!state.cart.length){ alert("Carrinho vazio."); return; }
+    const cepInput=(els.ckCep?.value||"").trim();
+    const cep=sanitizeCep(cepInput);
+    if(cep.length!==8){ alert("Informe um CEP válido para calcular o frete."); return; }
+
+    if(els.ckCalcShipping){
+      els.ckCalcShipping.disabled=true;
+      els.ckCalcShipping.textContent="Calculando...";
+    }
+    if(els.ckShippingSummary){
+      els.ckShippingSummary.classList.remove("error-text");
+      els.ckShippingSummary.textContent="Calculando frete...";
+    }
+
+    try{
+      const subtotal=getCheckoutSubtotal();
+      const payload={
+        cep,
+        subtotal,
+        items:state.cart.map(item=>({
+          id:item.id,
+          qty:item.qty,
+          price:item.price,
+          ml:item.ml
+        }))
+      };
+      const resp=await fetch("/api/shipping",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+      const text=await resp.text();
+      let data={};
+      if(text){
+        try{ data=JSON.parse(text); }catch{ data={}; }
+      }
+      if(!resp.ok){
+        const message=data?.error||`HTTP ${resp.status}`;
+        throw new Error(message);
+      }
+      const costValue=Number(data?.cost);
+      if(!Number.isFinite(costValue)||costValue<0){
+        throw new Error(data?.error||"Frete indisponível no momento.");
+      }
+
+      state.checkoutShipping={
+        ...state.checkoutShipping,
+        method:"correios",
+        service:data?.service||state.checkoutShipping?.service||"Correios",
+        cost:costValue,
+        currency:data?.currency||"BRL",
+        calculated:true,
+        deliveryEstimate:data?.deliveryEstimate||"",
+        days:data?.deliveryDays||null,
+        calculatedAt:data?.calculatedAt?new Date(data.calculatedAt):new Date(),
+        lastCep:cep,
+        needsRecalculation:false,
+        cartSignature:computeCartSignature()
+      };
+
+      updateCheckoutShippingUI();
+    }catch(err){
+      console.error("Erro ao calcular frete:", err);
+      const message=err?.message||"Não foi possível calcular o frete.";
+      if(els.ckShippingSummary){
+        els.ckShippingSummary.textContent=message;
+        els.ckShippingSummary.classList.add("error-text");
+      }
+      state.checkoutShipping={
+        ...state.checkoutShipping,
+        calculated:false,
+        needsRecalculation:true,
+        cost:0,
+        deliveryEstimate:"",
+        days:null
+      };
+    }finally{
+      if(els.ckCalcShipping){
+        els.ckCalcShipping.disabled=false;
+        els.ckCalcShipping.textContent="Calcular frete";
+      }
+      renderCheckoutTotals();
+    }
+  }
+
+  function updateCheckoutShippingUI(){
+    const shippingState=state.checkoutShipping||{};
+    const method=sanitizeShippingMethod(shippingState.method);
+    if(shippingOptionEls.length){
+      shippingOptionEls.forEach(option=>{
+        const input=option.querySelector("input[type=\"radio\"]");
+        const isCurrent=input?.value===method;
+        if(input){ input.checked=isCurrent; }
+        option.classList.toggle("is-active",!!isCurrent);
+      });
+    }
+    if(els.ckShippingCorreiosArea) toggle(els.ckShippingCorreiosArea, method!=="correios");
+    if(els.ckShippingSummary){
+      if(method!=="correios"){
+        els.ckShippingSummary.textContent="";
+        els.ckShippingSummary.classList.remove("error-text");
+      }else if(!shippingState.calculated&&shippingState.needsRecalculation){
+        els.ckShippingSummary.textContent="Carrinho atualizado — calcule novamente o frete para ver o valor final.";
+        els.ckShippingSummary.classList.remove("error-text");
+      }else if(shippingState.calculated){
+        const costText=formatBRL(Math.max(0,Number(shippingState.cost)||0));
+        const parts=[`${shippingState.service||"Correios"}: ${costText}`];
+        if(shippingState.deliveryEstimate){
+          parts.push(shippingState.deliveryEstimate);
+        }
+        els.ckShippingSummary.textContent=parts.join(" • ");
+        els.ckShippingSummary.classList.remove("error-text");
+      }else{
+        els.ckShippingSummary.textContent="Informe o CEP e clique em \"Calcular frete\".";
+        els.ckShippingSummary.classList.remove("error-text");
+      }
+    }
+  }
+
+  function renderCheckoutTotals(){
+    if(!els.ckTotals) return;
+    const subtotal=getCheckoutSubtotal();
+    const shippingState=state.checkoutShipping||{};
+    const method=sanitizeShippingMethod(shippingState.method);
+    const shippingCalculated=method==="correios"&&shippingState.calculated;
+    const shippingCost=shippingCalculated?Math.max(0,Number(shippingState.cost)||0):0;
+    const total=subtotal+shippingCost;
+    const serviceLabel=method==="pickup"?"Retirada no local":`Frete (${shippingState.service||"Correios"})`;
+    let shippingValue;
+    if(method==="pickup"){
+      shippingValue="Sem custo";
+    }else if(shippingCalculated){
+      shippingValue=formatBRL(shippingCost);
+    }else{
+      shippingValue=shippingState.needsRecalculation?"Recalcular":"Calcular";
+    }
+    els.ckTotals.innerHTML=`
+      <div class="checkout-totals__row"><span>Subtotal</span><strong>${formatBRL(subtotal)}</strong></div>
+      <div class="checkout-totals__row"><span>${escapeHtml(serviceLabel)}</span><strong>${escapeHtml(String(shippingValue))}</strong></div>
+      <div class="checkout-totals__divider"></div>
+      <div class="checkout-totals__row checkout-totals__total"><span>Total</span><strong>${formatBRL(total)}</strong></div>
+    `;
+  }
+
+  function syncCheckoutShippingAfterCartChange(){
+    if(!state.checkoutShipping) return;
+    const signature=computeCartSignature();
+    const previous=state.checkoutShipping.cartSignature||"";
+    if(signature!==previous){
+      const wasCalculated=state.checkoutShipping.calculated;
+      state.checkoutShipping.cartSignature=signature;
+      if(state.checkoutShipping.method==="correios"){
+        state.checkoutShipping.calculated=false;
+        state.checkoutShipping.cost=0;
+        state.checkoutShipping.deliveryEstimate="";
+        state.checkoutShipping.deliveryDays=null;
+        state.checkoutShipping.calculatedAt=null;
+        state.checkoutShipping.needsRecalculation=wasCalculated;
+        state.checkoutShipping.lastCep=wasCalculated?state.checkoutShipping.lastCep||"":"";
+      }
+      updateCheckoutShippingUI();
+    }
+    renderCheckoutTotals();
+  }
+
+  function getCheckoutSubtotal(){
+    return state.cart.reduce((sum,item)=>{
+      const price=Number(item?.price)||0;
+      const qty=Math.max(0, Number(item?.qty)||0);
+      return sum+(price*qty);
+    },0);
+  }
+
+  function computeCartSignature(cart=state.cart){
+    if(!Array.isArray(cart)||!cart.length) return "";
+    return cart
+      .map(item=>`${item?.id||""}:${Math.max(0, Number(item?.qty)||0)}`)
+      .sort()
+      .join("|");
   }
 
   /* ==== Pedidos ==== */
@@ -691,7 +1040,33 @@ document.addEventListener("DOMContentLoaded", async () => {
     const friendlyId=order.id?order.id.slice(-6).toUpperCase():"000000";
     const createdAtText=formatOrderDate(order.createdAt);
     const customer=order.customer||{};
-    const destination=[customer.address,customer.cep].filter(Boolean).join(" · ");
+    const shipping=order.shipping||{};
+    const shippingMethod=sanitizeShippingMethod(shipping.method);
+    const destination=shippingMethod==="pickup"
+      ?"Retirada no local"
+      :[customer.address,formatCep(shipping.cep||customer.cep)].filter(Boolean).join(" · ");
+
+    const shippingCostValue=shippingMethod==="correios"?Math.max(0,Number(shipping.cost)||0):0;
+    const shippingService=(shipping.service||"").trim()||"Correios";
+    const shippingLabelParts=[];
+    if(shippingMethod==="pickup"){
+      shippingLabelParts.push("Retirada no local");
+      if(shipping.instructions){
+        shippingLabelParts.push(escapeHtml(shipping.instructions));
+      }
+    }else{
+      const serviceLabel=shippingService.toLowerCase()!=="correios"
+        ? `Correios — ${escapeHtml(shippingService)}`
+        : "Correios";
+      shippingLabelParts.push(serviceLabel);
+      if(shippingCostValue>0){
+        shippingLabelParts.push(formatBRL(shippingCostValue));
+      }
+      if(shipping.deliveryEstimate){
+        shippingLabelParts.push(escapeHtml(shipping.deliveryEstimate));
+      }
+    }
+    const shippingDisplay=shippingLabelParts.join(" • ");
 
     const metaLines=[];
     if(createdAtText) metaLines.push(`Realizado em ${createdAtText}`);
@@ -716,7 +1091,9 @@ document.addEventListener("DOMContentLoaded", async () => {
             <a class="btn small ghost" href="https://rastreamento.correios.com.br/app/index.php?codigo=${encodeURIComponent(order.trackingCode)}" target="_blank" rel="noreferrer">Ver no site dos Correios</a>
           </div>
         </div>`
-      : `<p class="muted">O código de rastreio será informado assim que o pedido for postado.</p>`;
+      : shippingMethod==="pickup"
+        ? `<p class="muted">Este pedido ficará disponível para retirada no estúdio Duo Parfum após a confirmação do pagamento.</p>`
+        : `<p class="muted">O código de rastreio será informado assim que o pedido for postado.</p>`;
 
     card.innerHTML=`
       <div class="pad order-card__content">
@@ -735,6 +1112,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           <div>
             <span class="order-card__label">Pagamento</span>
             <span class="order-card__value">${escapeHtml(customer.payment||"Não informado")}</span>
+          </div>
+          <div>
+            <span class="order-card__label">Entrega</span>
+            <span class="order-card__value">${escapeHtml(shippingDisplay||"Em confirmação")}</span>
           </div>
           <div>
             <span class="order-card__label">Total</span>
@@ -803,8 +1184,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     const container=els.ordersList.querySelector(`[data-tracking-status="${orderId}"]`);
     if(!container) return;
     const tracking=state.orderTracking[orderId];
+    const order=state.orders.find(o=>o.id===orderId);
+    const shippingMethod=sanitizeShippingMethod(order?.shipping?.method);
     if(!tracking||!tracking.code){
-      container.innerHTML=`<span class="muted">Aguardando código de rastreio.</span>`;
+      if(shippingMethod==="pickup"){
+        container.innerHTML=`<span class="muted">Retirada no estúdio Duo Parfum — agende a melhor data com nossa equipe.</span>`;
+      }else{
+        container.innerHTML=`<span class="muted">Aguardando código de rastreio.</span>`;
+      }
       return;
     }
     if(tracking.status==="loading"){
@@ -908,12 +1295,23 @@ document.addEventListener("DOMContentLoaded", async () => {
     })):
     [];
     const customer=data?.customer||{};
-    const trackingCode=sanitizeTrackingCode(data?.trackingCode||data?.shipping?.trackingCode||"");
+    const shippingRaw=typeof data?.shipping==="object"&&data.shipping?data.shipping:{};
+    const shippingMethod=sanitizeShippingMethod(shippingRaw.method||customer?.shippingMethod||"");
+    const trackingCode=sanitizeTrackingCode(data?.trackingCode||shippingRaw?.trackingCode||"");
+    const calculatedAt=typeof shippingRaw?.calculatedAt?.toDate==="function"
+      ? shippingRaw.calculatedAt.toDate()
+      : shippingRaw?.calculatedAt instanceof Date?shippingRaw.calculatedAt:null;
+    const trackingGeneratedAt=typeof shippingRaw?.trackingGeneratedAt?.toDate==="function"
+      ? shippingRaw.trackingGeneratedAt.toDate()
+      : shippingRaw?.trackingGeneratedAt instanceof Date?shippingRaw.trackingGeneratedAt:null;
+    const subtotalValue=Number(data?.subtotal);
+    const subtotal=Number.isFinite(subtotalValue)?subtotalValue:items.reduce((sum,item)=>sum+(Number(item.price)||0)*(Number(item.qty)||0),0);
     return {
       id:doc.id,
       status:data?.status||"pending",
       createdAt,
       items,
+      subtotal,
       total:Number(data?.total)||0,
       customer:{
         name:customer?.name||"",
@@ -923,7 +1321,23 @@ document.addEventListener("DOMContentLoaded", async () => {
         payment:customer?.payment||"",
         phone:customer?.phone||"",
         city:customer?.city||"",
-        state:customer?.state||""
+        state:customer?.state||"",
+        shippingMethod,
+        deliveryMethod:customer?.deliveryMethod||shippingRaw?.methodLabel||""
+      },
+      shipping:{
+        method:shippingMethod,
+        methodLabel:shippingRaw?.methodLabel|| (shippingMethod==="pickup"?"Retirada no local":"Entrega pelos Correios"),
+        service:shippingRaw?.service|| (shippingMethod==="pickup"?"Retirada":"Correios"),
+        cost:Number(shippingRaw?.cost)||0,
+        currency:shippingRaw?.currency||"BRL",
+        deliveryEstimate:shippingRaw?.deliveryEstimate||"",
+        deliveryDays:shippingRaw?.deliveryDays||null,
+        calculatedAt,
+        cep:shippingRaw?.cep||customer?.cep||"",
+        instructions:shippingRaw?.instructions||"",
+        trackingGeneratedAt,
+        trackingGeneratedBy:shippingRaw?.trackingGeneratedBy||""
       },
       trackingCode
     };
@@ -939,5 +1353,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   function sanitizeImg(src){return src||"https://picsum.photos/seed/duoparfum/600/400";}
   function isValidEmail(email=""){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);}
   function sanitizeTrackingCode(code=""){return code.toString().toUpperCase().replace(/[^A-Z0-9]/g,"");}
+  function sanitizeShippingMethod(value=""){const normalized=(value||"").toString().toLowerCase();if(["pickup","retirada","retirar"].includes(normalized)) return "pickup";return "correios";}
+  function sanitizeCep(value=""){return value.toString().replace(/\D/g,"").slice(0,8);}
+  function formatCep(value=""){const digits=sanitizeCep(value);if(digits.length!==8) return value||"";return `${digits.slice(0,5)}-${digits.slice(5)}`;}
   function escapeHtml(s=""){return s.replace(/[&<>\"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
 });
