@@ -161,7 +161,8 @@
 
         let token;
         try {
-          token = await user.getIdToken();
+          token = await user.getIdToken(true); // força refresh do token
+
         } catch (err) {
           console.error("Erro ao obter token de autenticação:", err);
           const error = new Error("Falha ao obter token de autenticação");
