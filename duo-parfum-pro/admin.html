@@ -496,9 +496,17 @@ auth.onAuthStateChanged(user => {
             if (shippingEstimate) {
               shippingParts.push(escapeHtml(shippingEstimate));
             }
+...
+            if (shippingEstimate) {
+              shippingParts.push(escapeHtml(shippingEstimate));
+            }
             if (shipping.originLabel) {
               shippingParts.push(`Postagem: ${escapeHtml(shipping.originLabel)}`);
             }
+          }
+          const shippingSummary = shippingParts.join(" • ");
+...
+
           }
           const shippingSummary = shippingParts.join(" • ");
 

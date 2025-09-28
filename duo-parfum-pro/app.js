@@ -7,10 +7,12 @@ const firebaseConfig = window.firebaseConfig || {
   messagingSenderId: "889684986920",
   appId: "1:889684986920:web:9d452daf2192124b19391d"
 };
+
 const ADMIN_EMAILS = [
   "guilhermeserraglio03@gmail.com",
   "guilhermeserraglio@gmail.com",
 ];
+
 const ORDER_STATUS = {
   pending: { key: "pending", label: "Pendente", className: "is-pending", description: "Aguardando confirmação de pagamento" },
   paid: { key: "paid", label: "Pago", className: "is-paid", description: "Pagamento confirmado" },
@@ -176,20 +178,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   let orderDocs = new Map();
   let orderPendingKeys = new Set();
   let checkoutOrderUnsubscribe = null;
-
   await loadProducts();
   renderProducts();
   updateCartUI();
   renderOrders();
 
-  /* ==== Funções ==== */
+  /* ==== Funções (produtos/UI) ==== */
   function initHeroSlider() {
     const root = document.querySelector(".hero-slider");
     if (!root) return;
 
     const slides = Array.from(root.querySelectorAll(".hero-slide"));
     const dots = Array.from(root.querySelectorAll(".hero-slider-dot"));
-
     if (!slides.length || slides.length !== dots.length) return;
 
     let activeIndex = slides.findIndex(slide => slide.classList.contains("is-active"));
@@ -200,9 +200,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const setActive = index => {
       const nextIndex = (index + slides.length) % slides.length;
       activeIndex = nextIndex;
-      slides.forEach((slide, idx) => {
-        slide.classList.toggle("is-active", idx === nextIndex);
-      });
+      slides.forEach((slide, idx) => slide.classList.toggle("is-active", idx === nextIndex));
       dots.forEach((dot, idx) => {
         const isCurrent = idx === nextIndex;
         dot.classList.toggle("is-active", isCurrent);
@@ -210,31 +208,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
     };
 
-    const stop = () => {
-      if (timerId) {
-        clearInterval(timerId);
-        timerId = null;
-      }
-    };
-
+    const stop = () => { if (timerId) { clearInterval(timerId); timerId = null; } };
     const start = () => {
       stop();
-      timerId = setInterval(() => {
-        setActive(activeIndex + 1);
-      }, INTERVAL);
+      timerId = setInterval(() => setActive(activeIndex + 1), INTERVAL);
     };
 
-    dots.forEach((dot, idx) => {
-      dot.addEventListener("click", () => {
-        setActive(idx);
-        start();
-      });
-    });
-
-    root.addEventListener("mouseenter", stop);
-    root.addEventListener("mouseleave", start);
-    root.addEventListener("focusin", stop);
-    root.addEventListener("focusout", start);
+    dots.forEach((dot, idx) => dot.addEventListener("click", () => { setActive(idx); start(); }));
+    ["mouseenter","focusin"].forEach(ev => root.addEventListener(ev, stop));
+    ["mouseleave","focusout"].forEach(ev => root.addEventListener(ev, start));
 
     setActive(activeIndex);
     start();
@@ -306,6 +288,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     els.cartDrawer.classList.toggle("hidden", !show);
     els.cartDrawer.setAttribute("aria-hidden", show?"false":"true");
   }
+
   function openModal(p){
     state.selected=p;
     if (els.pmImg) els.pmImg.src=sanitizeImg(p.image);
@@ -318,7 +301,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (els.pmFav) els.pmFav.onclick=()=> toggleFav(p);
     els.productModal?.showModal();
   }
+
   function closeModal(){ els.productModal?.close(); }
+
   function toggleFav(p){
     const favs=new Set(JSON.parse(localStorage.getItem("favs")||"[]"));
     if(favs.has(p.id)) favs.delete(p.id); else favs.add(p.id);
@@ -332,11 +317,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     if(idx>=0) cart[idx].qty+=qty; else cart.push({id:p.id,name:p.name,price:p.price,img:p.image,qty,ml:p.ml});
     saveCart(cart); updateCartUI(); openDrawer(true); if(close) closeModal();
   }
+
   function changeQty(id,delta){
     const it=state.cart.find(i=>i.id===id); if(!it) return;
     it.qty+=delta; if(it.qty<=0) state.cart=state.cart.filter(i=>i.id!==id);
     saveCart(state.cart); updateCartUI();
   }
+
   function removeItem(id){ state.cart=state.cart.filter(i=>i.id!==id); saveCart(state.cart); updateCartUI(); }
 
   function updateCartUI(){
@@ -368,9 +355,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (els.cartCount) els.cartCount.textContent=count;
     syncCheckoutShippingAfterCartChange();
   }
-
   async function confirmCheckout(){
     if(state.processingCheckout) return;
+
+    // exige login para fechar pedido
+    if (!auth.currentUser) {
+      alert("Você precisa estar logado para finalizar a compra.");
+      return;
+    }
+
     const name=(els.ckName?.value||"").trim();
     const email=(els.ckEmail?.value||"").trim().toLowerCase();
     const cepInput=(els.ckCep?.value||"").trim();
@@ -463,6 +456,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     let success=false;
     try{
+      // sua API de pagamento decide PIX/Cartão e devolve link/qr/code
       const resp=await fetch("/api/payment",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId,order})});
       if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data=await resp.json();
@@ -471,11 +465,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       if(payment==="pix"){
         if(els.paymentArea){
           const pixParts=["<p>Escaneie o QRCode para pagar:</p>"];
-          if(data.qr){
-            pixParts.push(`<img src="data:image/png;base64,${data.qr}" style="max-width:200px">`);
-          }else{
-            pixParts.push("<p class=\"muted\">QRCode indisponível. Utilize o código abaixo para concluir o pagamento.</p>");
-          }
+          if(data.qr){ pixParts.push(`<img src="data:image/png;base64,${data.qr}" style="max-width:200px">`); }
+          else { pixParts.push("<p class=\"muted\">QRCode indisponível. Utilize o código abaixo para concluir o pagamento.</p>"); }
           if(data.code){
             pixParts.push("<p>Código Copia e Cola:</p>");
             pixParts.push(`<textarea readonly style="width:100%">${escapeHtml(data.code)}</textarea>`);
@@ -487,6 +478,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }else if(payment==="card"){
         if(els.paymentArea) els.paymentArea.innerHTML=`<a href="${data.link}" target="_blank" class="btn">Pagar com cartão</a>`;
       }
+
       if (els.paymentArea){
         els.paymentArea.insertAdjacentHTML("beforeend","<p class=\"muted\" style=\"margin-top:12px\">Pedido registrado com sucesso. Utilize o pagamento acima para concluir sua compra.</p>");
         const shippingInfoParts=[];
@@ -494,28 +486,27 @@ document.addEventListener("DOMContentLoaded", async () => {
           shippingInfoParts.push("Entrega: retirada no estúdio Duo Parfum após confirmação.");
         }else{
           shippingInfoParts.push(`Frete ${escapeHtml(shippingDetails.service||"Correios")}: ${formatBRL(shippingCost)}`);
-          if(shippingDetails.deliveryEstimate){
-            shippingInfoParts.push(escapeHtml(shippingDetails.deliveryEstimate));
-          }
-          if(shippingDetails.originLabel){
-            shippingInfoParts.push(`Postagem: ${escapeHtml(shippingDetails.originLabel)}`);
-          }
-          if(shippingDetails.instructions){
-            shippingInfoParts.push(escapeHtml(shippingDetails.instructions));
-          }
+          if(shippingDetails.deliveryEstimate){ shippingInfoParts.push(escapeHtml(shippingDetails.deliveryEstimate)); }
+          if(shippingDetails.originLabel){ shippingInfoParts.push(`Postagem: ${escapeHtml(shippingDetails.originLabel)}`); }
+          if(shippingDetails.instructions){ shippingInfoParts.push(escapeHtml(shippingDetails.instructions)); }
         }
         if(shippingInfoParts.length){
           els.paymentArea.insertAdjacentHTML("beforeend",`<p class=\"muted\" style=\"margin-top:6px\">${shippingInfoParts.join(" • ")}</p>`);
         }
       }
+
+      // esvazia carrinho
       state.cart=[];
       saveCart(state.cart);
       updateCartUI();
       openDrawer(false);
       markCheckoutCompleted();
+
+      // começa a escutar o status do pedido (paid/canceled) em tempo real
       state.checkoutOrderId = orderId;
       listenToCheckoutOrder(orderId);
       success=true;
+
     }catch(e){
       console.error(e);
       alert("Erro ao gerar pagamento.");
@@ -568,11 +559,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       <span>${escapeHtml(statusInfo.description||"")}</span>
     </div>`;
     const existing=els.paymentArea.querySelector("[data-payment-status]");
-    if(existing){
-      existing.outerHTML=html;
-    }else{
-      els.paymentArea.insertAdjacentHTML("afterbegin",html);
-    }
+    if(existing){ existing.outerHTML=html; } else { els.paymentArea.insertAdjacentHTML("afterbegin",html); }
   }
 
   function renderCheckoutPaymentStatusError(message){
@@ -582,11 +569,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       <span>${escapeHtml(message||"Não foi possível confirmar o status do pagamento automaticamente.")}</span>
     </div>`;
     const existing=els.paymentArea.querySelector("[data-payment-status]");
-    if(existing){
-      existing.outerHTML=html;
-    }else{
-      els.paymentArea.insertAdjacentHTML("afterbegin",html);
-    }
+    if(existing){ existing.outerHTML=html; } else { els.paymentArea.insertAdjacentHTML("afterbegin",html); }
   }
 
   function stopCheckoutOrderListener(options={}){
@@ -695,9 +678,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       shippingOptionEls.forEach(option=>{
         const input=option.querySelector("input[type=\"radio\"]");
         const isCurrent=input?.value===normalized;
-        if(updateRadio&&input){
-          input.checked=isCurrent;
-        }
+        if(updateRadio&&input){ input.checked=isCurrent; }
         option.classList.toggle("is-active",!!isCurrent);
       });
     }
@@ -736,9 +717,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const resp=await fetch("/api/shipping",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
       const text=await resp.text();
       let data={};
-      if(text){
-        try{ data=JSON.parse(text); }catch{ data={}; }
-      }
+      if(text){ try{ data=JSON.parse(text); }catch{ data={}; } }
       if(!resp.ok){
         const message=data?.error||`HTTP ${resp.status}`;
         throw new Error(message);
@@ -814,12 +793,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       }else if(shippingState.calculated){
         const costText=formatBRL(Math.max(0,Number(shippingState.cost)||0));
         const parts=[`${shippingState.service||"Correios"}: ${costText}`];
-        if(shippingState.deliveryEstimate){
-          parts.push(shippingState.deliveryEstimate);
-        }
-        if(shippingState.originLabel){
-          parts.push(`Postagem: ${shippingState.originLabel}`);
-        }
+        if(shippingState.deliveryEstimate){ parts.push(shippingState.deliveryEstimate); }
+        if(shippingState.originLabel){ parts.push(`Postagem: ${shippingState.originLabel}`); }
         els.ckShippingSummary.textContent=parts.join(" • ");
         els.ckShippingSummary.classList.remove("error-text");
       }else{
@@ -839,13 +814,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     const total=subtotal+shippingCost;
     const serviceLabel=method==="pickup"?"Retirada no local":`Frete (${shippingState.service||"Correios"})`;
     let shippingValue;
-    if(method==="pickup"){
-      shippingValue="Sem custo";
-    }else if(shippingCalculated){
-      shippingValue=formatBRL(shippingCost);
-    }else{
-      shippingValue=shippingState.needsRecalculation?"Recalcular":"Calcular";
-    }
+    if(method==="pickup"){ shippingValue="Sem custo"; }
+    else if(shippingCalculated){ shippingValue=formatBRL(shippingCost); }
+    else { shippingValue=shippingState.needsRecalculation?"Recalcular":"Calcular"; }
+
     els.ckTotals.innerHTML=`
       <div class="checkout-totals__row"><span>Subtotal</span><strong>${formatBRL(subtotal)}</strong></div>
       <div class="checkout-totals__row"><span>${escapeHtml(serviceLabel)}</span><strong>${escapeHtml(String(shippingValue))}</strong></div>
@@ -890,8 +862,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       .sort()
       .join("|");
   }
-
-  /* ==== Pedidos ==== */
+  /* ==== Pedidos (do usuário) ==== */
   function cleanupOrderListeners(){
     if (orderUnsubscribes.length){
       orderUnsubscribes.forEach(unsub=>{
@@ -979,9 +950,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function updateOrdersFromAggregated(){
     const orders=[];
-    orderDocs.forEach(doc=>{
-      orders.push(mapOrderDocument(doc));
-    });
+    orderDocs.forEach(doc=>{ orders.push(mapOrderDocument(doc)); });
     orders.sort((a,b)=>(b.createdAt?.getTime?.()||0)-(a.createdAt?.getTime?.()||0));
 
     const prevTracking=state.orderTracking||{};
@@ -1086,23 +1055,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     const shippingLabelParts=[];
     if(shippingMethod==="pickup"){
       shippingLabelParts.push("Retirada no local");
-      if(shipping.instructions){
-        shippingLabelParts.push(escapeHtml(shipping.instructions));
-      }
+      if(shipping.instructions){ shippingLabelParts.push(escapeHtml(shipping.instructions)); }
     }else{
       const serviceLabel=shippingService.toLowerCase()!=="correios"
         ? `Correios — ${escapeHtml(shippingService)}`
         : "Correios";
       shippingLabelParts.push(serviceLabel);
-      if(shippingCostValue>0){
-        shippingLabelParts.push(formatBRL(shippingCostValue));
-      }
-      if(shipping.deliveryEstimate){
-        shippingLabelParts.push(escapeHtml(shipping.deliveryEstimate));
-      }
-      if(shipping.originLabel){
-        shippingLabelParts.push(`Postagem: ${escapeHtml(shipping.originLabel)}`);
-      }
+      if(shippingCostValue>0){ shippingLabelParts.push(formatBRL(shippingCostValue)); }
+      if(shipping.deliveryEstimate){ shippingLabelParts.push(escapeHtml(shipping.deliveryEstimate)); }
+      if(shipping.originLabel){ shippingLabelParts.push(`Postagem: ${escapeHtml(shipping.originLabel)}`); }
     }
     const shippingDisplay=shippingLabelParts.join(" • ");
 
@@ -1172,6 +1133,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     return card;
   }
 
+  /* ==== Rastreio Correios (cliente) ==== */
   function requestTracking(order,force=false){
     const code=sanitizeTrackingCode(order?.trackingCode||"");
     const id=order?.id;
@@ -1204,16 +1166,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     const resp=await fetch(`/api/tracking?code=${encodeURIComponent(code)}`);
     const text=await resp.text();
     let payload={};
-    if(text){
-      try{ payload=JSON.parse(text); }catch{ payload={}; }
-    }
+    if(text){ try{ payload=JSON.parse(text); }catch{ payload={}; } }
     if(!resp.ok){
       const message=payload?.error||`HTTP ${resp.status}`;
       throw new Error(message);
     }
-    if(payload?.error){
-      throw new Error(payload.error);
-    }
+    if(payload?.error){ throw new Error(payload.error); }
     return payload;
   }
 
@@ -1225,6 +1183,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const order=state.orders.find(o=>o.id===orderId);
     const shippingMethod=sanitizeShippingMethod(order?.shipping?.method);
     const originLabel=order?.shipping?.originLabel||SHIPPING_ORIGIN_LABEL;
+
     if(!tracking||!tracking.code){
       if(shippingMethod==="pickup"){
         container.innerHTML=`<span class="muted">Retirada no estúdio Duo Parfum — agende a melhor data com nossa equipe.</span>`;
@@ -1252,9 +1211,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const momentText=formatTrackingMoment(last);
     const momentHtml=momentText?escapeHtml(momentText):"";
     const locationHtml=last.location?escapeHtml(last.location):"";
-    const infoParts=[];
-    if(momentHtml) infoParts.push(momentHtml);
-    if(locationHtml) infoParts.push(locationHtml);
+    const infoParts=[]; if(momentHtml) infoParts.push(momentHtml); if(locationHtml) infoParts.push(locationHtml);
     const infoLine=infoParts.length?`<span>${infoParts.join(" · ")}</span>`:"";
     const detailsText=last.details&&last.details!==last.description?last.details:last.description;
     const detailsHtml=detailsText?`<p>${escapeHtml(detailsText)}</p>`:"";
@@ -1265,9 +1222,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const eventMoment=formatTrackingMoment(ev);
       const eventMomentHtml=eventMoment?escapeHtml(eventMoment):"";
       const eventLocation=ev.location?escapeHtml(ev.location):"";
-      const info=[];
-      if(eventMomentHtml) info.push(eventMomentHtml);
-      if(eventLocation) info.push(eventLocation);
+      const info=[]; if(eventMomentHtml) info.push(eventMomentHtml); if(eventLocation) info.push(eventLocation);
       const infoHtml=info.length?`<span>${info.join(" · ")}</span>`:"";
       const eventDetails=ev.details&&ev.details!==ev.description?`<div>${escapeHtml(ev.details)}</div>`:"";
       return `<li><strong>${eventTitle}</strong>${infoHtml}${eventDetails}</li>`;
@@ -1289,9 +1244,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function formatOrderDate(value){
     if(!value) return "";
     let date=value;
-    if(!(date instanceof Date)){
-      date=new Date(date);
-    }
+    if(!(date instanceof Date)){ date=new Date(date); }
     if(!(date instanceof Date)||Number.isNaN(date.getTime())) return "";
     return date.toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
   }
@@ -1331,8 +1284,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       ml:item?.ml||"",
       qty:item?.qty||1,
       price:item?.price||0
-    })):
-    [];
+    })): [];
     const customer=data?.customer||{};
     const shippingRaw=typeof data?.shipping==="object"&&data.shipping?data.shipping:{};
     const shippingMethod=sanitizeShippingMethod(shippingRaw.method||customer?.shippingMethod||"");
@@ -1345,6 +1297,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       : shippingRaw?.trackingGeneratedAt instanceof Date?shippingRaw.trackingGeneratedAt:null;
     const subtotalValue=Number(data?.subtotal);
     const subtotal=Number.isFinite(subtotalValue)?subtotalValue:items.reduce((sum,item)=>sum+(Number(item.price)||0)*(Number(item.qty)||0),0);
+
     return {
       id:doc.id,
       status:data?.status||"pending",
@@ -1366,8 +1319,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       },
       shipping:{
         method:shippingMethod,
-        methodLabel:shippingRaw?.methodLabel|| (shippingMethod==="pickup"?"Retirada no local":"Entrega pelos Correios"),
-        service:shippingRaw?.service|| (shippingMethod==="pickup"?"Retirada":"Correios"),
+        methodLabel:shippingRaw?.methodLabel||(shippingMethod==="pickup"?"Retirada no local":"Entrega pelos Correios"),
+        service:shippingRaw?.service||(shippingMethod==="pickup"?"Retirada":"Correios"),
         cost:Number(shippingRaw?.cost)||0,
         currency:shippingRaw?.currency||"BRL",
         deliveryEstimate:shippingRaw?.deliveryEstimate||"",

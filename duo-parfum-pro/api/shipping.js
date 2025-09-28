@@ -218,7 +218,6 @@ module.exports = async function handler(req, res) {
   }
 
   const subtotalValue = Number(payload?.subtotal);
-
   const serviceKey = (payload?.service || payload?.method || DEFAULT_SERVICE_KEY)
     .toString()
     .toLowerCase();
