@@ -148,7 +148,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       cartSignature: "",
       needsRecalculation: false,
       calculatedAt: null,
-      days: null,
+      deliveryDays: null,
       origin: { ...SHIPPING_ORIGIN },
       originLabel: SHIPPING_ORIGIN_LABEL
     }
@@ -419,7 +419,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       deliveryEstimate:shippingMethod==="pickup"
         ?"Disponível para retirada após confirmação do pagamento"
         :(shippingState.deliveryEstimate||""),
-      deliveryDays:shippingMethod==="pickup"?null:(shippingState.days||null),
+      deliveryDays:shippingMethod==="pickup"?null:(shippingState.deliveryDays||null),
       calculatedAt:shippingMethod==="pickup"
         ?new Date()
         :(shippingState.calculatedAt instanceof Date?shippingState.calculatedAt:new Date()),
@@ -646,7 +646,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       cartSignature:computeCartSignature(),
       needsRecalculation:false,
       calculatedAt:null,
-      days:null,
+      deliveryDays:null,
       origin:{...SHIPPING_ORIGIN},
       originLabel:SHIPPING_ORIGIN_LABEL
     };
@@ -756,7 +756,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         currency:data?.currency||"BRL",
         calculated:true,
         deliveryEstimate:data?.deliveryEstimate||"",
-        days:data?.deliveryDays||null,
+        deliveryDays:data?.deliveryDays||null,
         calculatedAt:data?.calculatedAt?new Date(data.calculatedAt):new Date(),
         lastCep:cep,
         needsRecalculation:false,
@@ -779,7 +779,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         needsRecalculation:true,
         cost:0,
         deliveryEstimate:"",
-        days:null,
+        deliveryDays:null,
         origin:{...SHIPPING_ORIGIN},
         originLabel:SHIPPING_ORIGIN_LABEL
       };
