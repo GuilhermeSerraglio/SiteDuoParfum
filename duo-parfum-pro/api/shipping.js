@@ -14,17 +14,27 @@ const CORREIOS_SERVICES = {
 const DEFAULT_SERVICE_KEY = "pac";
 const MAX_DECLARED_VALUE = 10000;
 const MAX_WEIGHT_KG = 30;
-const MIN_WEIGHT_KG = 0.3; // peso mínimo aceito pelos Correios
-const PACKAGE_BUFFER_WEIGHT_KG = 0.12; // envelope/embalagem
-const BASE_ITEM_WEIGHT_KG = 0.05; // 50g por item quando não houver referência
+const MIN_REQUEST_WEIGHT_KG = 0.1; // peso mínimo considerado para o cálculo interno
+const MIN_BILLABLE_WEIGHT_KG = 0.3; // peso mínimo aceito pelos Correios
+const PACKAGE_BUFFER_WEIGHT_KG = 0.05; // envelope/embalagem leve
+const BASE_ITEM_WEIGHT_KG = 0.02; // 20g por item quando não houver referência
 
 const PACKAGE_DIMENSIONS = {
   formato: "1", // caixa/pacote
-  comprimento: 18, // cm (mínimo 16)
-  altura: 4, // cm (mínimo 2)
-  largura: 16, // cm (mínimo 11)
+  comprimento: 16, // cm (mínimo 16)
+  altura: 2, // cm (mínimo 2)
+  largura: 11, // cm (mínimo 11)
   diametro: 0, // não aplicável
 };
+
+let cachedFetch = typeof fetch === "function" ? fetch : null;
+
+async function ensureFetch() {
+  if (cachedFetch) return cachedFetch;
+  const { default: nodeFetch } = await import("node-fetch");
+  cachedFetch = nodeFetch;
+  return cachedFetch;
+}
 
 function parseBody(body) {
   if (!body) return {};
@@ -62,11 +72,17 @@ function computeItemWeightKg(rawItem = {}) {
   return qty * Math.max(BASE_ITEM_WEIGHT_KG, inferredKg);
 }
 
-function computeTotalWeightKg(items = []) {
+function computePhysicalWeightKg(items = []) {
   const itemsWeight = items.reduce((sum, item) => sum + computeItemWeightKg(item), 0);
   const total = itemsWeight + PACKAGE_BUFFER_WEIGHT_KG;
-  const bounded = Math.min(MAX_WEIGHT_KG, Math.max(MIN_WEIGHT_KG, total));
+  const bounded = Math.min(MAX_WEIGHT_KG, Math.max(MIN_REQUEST_WEIGHT_KG, total));
   return Math.round(bounded * 1000) / 1000;
+}
+
+function computeBillableWeightKg(weightKg) {
+  return Math.round(
+    Math.min(MAX_WEIGHT_KG, Math.max(MIN_BILLABLE_WEIGHT_KG, weightKg)) * 1000
+  ) / 1000;
 }
 
 function computeSubtotal(items = [], explicitSubtotal) {
@@ -99,6 +115,65 @@ function parseCorreiosPrazo(value) {
   return Number.isFinite(prazo) && prazo > 0 ? prazo : null;
 }
 
+function decodeHtmlEntities(value = "") {
+  return value
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#(\d+);/g, (_, code) => {
+      const num = Number(code);
+      return Number.isFinite(num) ? String.fromCharCode(num) : _;
+    });
+}
+
+function parseCorreiosXml(text) {
+  if (typeof text !== "string" || !text.trim()) {
+    return null;
+  }
+
+  const serviceMatches = Array.from(text.matchAll(/<cServico>([\s\S]*?)<\/cServico>/gi));
+  if (!serviceMatches.length) {
+    return null;
+  }
+
+  const services = serviceMatches.map((match) => {
+    const chunk = match[1];
+    const fields = {};
+    chunk.replace(/<([A-Za-z0-9]+)>([\s\S]*?)<\/\1>/g, (_, tag, value) => {
+      fields[tag] = decodeHtmlEntities(value.trim());
+      return "";
+    });
+    return fields;
+  });
+
+  return { Servicos: { cServico: services } };
+}
+
+function parseCorreiosResponse(rawText) {
+  if (!rawText) return null;
+
+  if (typeof rawText === "object") {
+    return rawText;
+  }
+
+  if (typeof rawText === "string") {
+    try {
+      const data = JSON.parse(rawText);
+      if (data && typeof data === "object") {
+        return data;
+      }
+    } catch (err) {
+      // ignore JSON parse errors and try XML fallback
+    }
+
+    return parseCorreiosXml(rawText);
+  }
+
+  return null;
+}
+
 function buildCorreiosUrl({
   serviceCode,
   destinationCep,
@@ -128,16 +203,18 @@ function buildCorreiosUrl({
 
 async function requestCorreiosQuote({ cep, items, subtotal, serviceKey }) {
   const service = CORREIOS_SERVICES[serviceKey] || CORREIOS_SERVICES[DEFAULT_SERVICE_KEY];
-  const weightKg = computeTotalWeightKg(items);
+  const physicalWeightKg = computePhysicalWeightKg(items);
+  const billedWeightKg = computeBillableWeightKg(physicalWeightKg);
   const declaredValue = computeSubtotal(items, subtotal);
   const url = buildCorreiosUrl({
     serviceCode: service.code,
     destinationCep: cep,
-    weightKg,
+    weightKg: billedWeightKg,
     declaredValue,
   });
 
-  const response = await fetch(url, { cache: "no-store" });
+  const fetchFn = await ensureFetch();
+  const response = await fetchFn(url, { cache: "no-store" });
   if (!response.ok) {
     const error = new Error(`Correios HTTP ${response.status}`);
     error.status = response.status;
@@ -145,12 +222,10 @@ async function requestCorreiosQuote({ cep, items, subtotal, serviceKey }) {
   }
 
   const rawText = await response.text();
-  let data;
-  try {
-    data = rawText ? JSON.parse(rawText) : null;
-  } catch (err) {
+  const data = parseCorreiosResponse(rawText);
+  if (!data) {
     const error = new Error("Resposta inválida dos Correios");
-    error.cause = err;
+    error.response = rawText;
     throw error;
   }
 
@@ -193,7 +268,8 @@ async function requestCorreiosQuote({ cep, items, subtotal, serviceKey }) {
     origin: { ...ORIGIN },
     originLabel: ORIGIN_LABEL,
     package: {
-      weightKg,
+      weightKg: physicalWeightKg,
+      billedWeightKg,
       declaredValue: Math.round(declaredValue * 100) / 100,
       dimensions: { ...PACKAGE_DIMENSIONS },
     },
