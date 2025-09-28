@@ -41,6 +41,33 @@ function buildItems(items = []) {
     .filter((item) => item.unit_price > 0 && item.quantity > 0);
 }
 
+function buildShippingItem(shipping = {}) {
+  const method = (shipping?.method || "").toString().toLowerCase();
+  const costValue = Number(shipping?.cost);
+  if (!Number.isFinite(costValue) || costValue <= 0) {
+    return null;
+  }
+  const service = (shipping?.service || "Correios").toString().trim();
+  const titleParts = [];
+  if (method === "pickup") {
+    titleParts.push("Retirada em loja");
+  } else {
+    titleParts.push("Frete");
+    if (service && service.toLowerCase() !== "correios") {
+      titleParts.push(service);
+    } else {
+      titleParts.push("Correios");
+    }
+  }
+  const title = titleParts.join(" - ") || "Frete";
+  return {
+    title,
+    quantity: 1,
+    currency_id: "BRL",
+    unit_price: Math.round(costValue * 100) / 100,
+  };
+}
+
 // ----------------- Funções auxiliares de cliente -----------------
 
 function sanitizeEmail(email) {
@@ -187,6 +214,10 @@ module.exports = async function handler(req, res) {
     }
 
     const items = buildItems(order.items);
+    const shippingItem = buildShippingItem(order.shipping);
+    if (shippingItem) {
+      items.push(shippingItem);
+    }
     if (!items.length) {
       return res.status(400).json({ error: "Pedido sem itens" });
     }

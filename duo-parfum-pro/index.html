@@ -229,13 +229,40 @@
           <div class="row wrap" style="margin-top:8px">
             <input id="ckName" class="input" placeholder="Nome completo" style="flex:1;min-width:220px" autocomplete="name">
             <input id="ckEmail" class="input" type="email" placeholder="E-mail" style="flex:1;min-width:220px" autocomplete="email">
-            <input id="ckCep" class="input" placeholder="CEP" style="width:160px">
+            <input id="ckCep" class="input" placeholder="CEP" style="width:160px" inputmode="numeric" maxlength="9">
             <input id="ckAddress" class="input" placeholder="Endereço completo" style="flex:1;min-width:260px">
             <select id="ckPayment" class="input" style="width:200px">
               <option value="pix">Pix</option>
               <option value="card">Cartão de crédito</option>
             </select>
           </div>
+          <div class="checkout-shipping-block">
+            <p class="checkout-section-title">Entrega</p>
+            <div class="checkout-shipping-options" id="ckShippingOptions">
+              <label class="shipping-option" data-shipping-option="pickup">
+                <input type="radio" name="ckShippingMethod" id="ckShippingPickup" value="pickup">
+                <div class="shipping-option__content">
+                  <strong>Retirar no local</strong>
+                  <span>Combine a retirada conosco após a confirmação do pagamento.</span>
+                </div>
+              </label>
+              <label class="shipping-option" data-shipping-option="correios">
+                <input type="radio" name="ckShippingMethod" id="ckShippingCorreios" value="correios" checked>
+                <div class="shipping-option__content">
+                  <strong>Entrega pelos Correios</strong>
+                  <span>Receba em casa com rastreio completo e seguro.</span>
+                </div>
+              </label>
+            </div>
+            <div id="ckShippingCorreiosArea" class="shipping-calc">
+              <p class="muted text-small">Informe seu CEP e clique em "Calcular frete" para ver o valor e o prazo de entrega.</p>
+              <div class="shipping-calc__actions">
+                <button id="ckCalcShipping" type="button" class="btn ghost">Calcular frete</button>
+              </div>
+              <div id="ckShippingSummary" class="shipping-summary muted"></div>
+            </div>
+          </div>
+          <div id="ckTotals" class="checkout-totals"></div>
           <div id="paymentArea" style="margin-top:14px"></div>
           <div class="row gap" style="margin-top:14px">
             <button id="ckConfirm" class="btn">Gerar pagamento</button>
