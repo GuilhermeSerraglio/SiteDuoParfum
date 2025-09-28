@@ -115,6 +115,65 @@ function parseCorreiosPrazo(value) {
   return Number.isFinite(prazo) && prazo > 0 ? prazo : null;
 }
 
+function decodeHtmlEntities(value = "") {
+  return value
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#(\d+);/g, (_, code) => {
+      const num = Number(code);
+      return Number.isFinite(num) ? String.fromCharCode(num) : _;
+    });
+}
+
+function parseCorreiosXml(text) {
+  if (typeof text !== "string" || !text.trim()) {
+    return null;
+  }
+
+  const serviceMatches = Array.from(text.matchAll(/<cServico>([\s\S]*?)<\/cServico>/gi));
+  if (!serviceMatches.length) {
+    return null;
+  }
+
+  const services = serviceMatches.map((match) => {
+    const chunk = match[1];
+    const fields = {};
+    chunk.replace(/<([A-Za-z0-9]+)>([\s\S]*?)<\/\1>/g, (_, tag, value) => {
+      fields[tag] = decodeHtmlEntities(value.trim());
+      return "";
+    });
+    return fields;
+  });
+
+  return { Servicos: { cServico: services } };
+}
+
+function parseCorreiosResponse(rawText) {
+  if (!rawText) return null;
+
+  if (typeof rawText === "object") {
+    return rawText;
+  }
+
+  if (typeof rawText === "string") {
+    try {
+      const data = JSON.parse(rawText);
+      if (data && typeof data === "object") {
+        return data;
+      }
+    } catch (err) {
+      // ignore JSON parse errors and try XML fallback
+    }
+
+    return parseCorreiosXml(rawText);
+  }
+
+  return null;
+}
+
 function buildCorreiosUrl({
   serviceCode,
   destinationCep,
@@ -163,12 +222,10 @@ async function requestCorreiosQuote({ cep, items, subtotal, serviceKey }) {
   }
 
   const rawText = await response.text();
-  let data;
-  try {
-    data = rawText ? JSON.parse(rawText) : null;
-  } catch (err) {
+  const data = parseCorreiosResponse(rawText);
+  if (!data) {
     const error = new Error("Resposta inválida dos Correios");
-    error.cause = err;
+    error.response = rawText;
     throw error;
   }
 
