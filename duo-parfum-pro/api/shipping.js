@@ -1,8 +1,30 @@
-const BASE_COST = 16.9;
-const COST_PER_ITEM = 2.4;
-const COST_PER_WEIGHT_UNIT = 1.8;
-const INSURANCE_RATE = 0.018;
-const MIN_COST = 14;
+const ORIGIN = {
+  city: "Sorriso",
+  state: "MT",
+  cep: "78890000",
+};
+
+const ORIGIN_LABEL = `${ORIGIN.city} - ${ORIGIN.state}`;
+
+const CORREIOS_SERVICES = {
+  pac: { code: "04510", name: "PAC" },
+  sedex: { code: "04014", name: "SEDEX" },
+};
+
+const DEFAULT_SERVICE_KEY = "pac";
+const MAX_DECLARED_VALUE = 10000;
+const MAX_WEIGHT_KG = 30;
+const MIN_WEIGHT_KG = 0.3; // peso mínimo aceito pelos Correios
+const PACKAGE_BUFFER_WEIGHT_KG = 0.12; // envelope/embalagem
+const BASE_ITEM_WEIGHT_KG = 0.05; // 50g por item quando não houver referência
+
+const PACKAGE_DIMENSIONS = {
+  formato: "1", // caixa/pacote
+  comprimento: 18, // cm (mínimo 16)
+  altura: 4, // cm (mínimo 2)
+  largura: 16, // cm (mínimo 11)
+  diametro: 0, // não aplicável
+};
 
 function parseBody(body) {
   if (!body) return {};
@@ -29,49 +51,152 @@ function parseMl(value) {
   return Number.isFinite(ml) && ml > 0 ? ml : 0;
 }
 
-function computeWeightFactor(items = []) {
-  return items.reduce((acc, item) => {
+function computeItemWeightKg(rawItem = {}) {
+  const qty = Math.max(1, Number(rawItem?.qty) || 1);
+  const weightKg = Number(rawItem?.weightKg || rawItem?.weight || 0);
+  if (Number.isFinite(weightKg) && weightKg > 0) {
+    return qty * Math.min(MAX_WEIGHT_KG, weightKg);
+  }
+  const ml = parseMl(rawItem?.ml);
+  const inferredKg = ml ? ml / 1000 : BASE_ITEM_WEIGHT_KG;
+  return qty * Math.max(BASE_ITEM_WEIGHT_KG, inferredKg);
+}
+
+function computeTotalWeightKg(items = []) {
+  const itemsWeight = items.reduce((sum, item) => sum + computeItemWeightKg(item), 0);
+  const total = itemsWeight + PACKAGE_BUFFER_WEIGHT_KG;
+  const bounded = Math.min(MAX_WEIGHT_KG, Math.max(MIN_WEIGHT_KG, total));
+  return Math.round(bounded * 1000) / 1000;
+}
+
+function computeSubtotal(items = [], explicitSubtotal) {
+  if (Number.isFinite(explicitSubtotal)) {
+    return Math.max(0, explicitSubtotal);
+  }
+  return items.reduce((sum, item) => {
+    const price = Number(item?.price) || 0;
     const qty = Math.max(1, Number(item?.qty) || 1);
-    const ml = parseMl(item?.ml);
-    const baseWeight = ml ? ml / 50 : 1;
-    return acc + baseWeight * qty;
+    return sum + price * qty;
   }, 0);
 }
 
-function estimateDistanceFactor(cep) {
-  if (!cep || cep.length < 3) return 0;
-  const prefix = Number(cep.slice(0, 3));
-  if (!Number.isFinite(prefix)) return 0;
-  return Math.max(0, prefix / 120);
+function formatDeclaredValueBR(decimalsValue) {
+  const safe = Math.min(
+    MAX_DECLARED_VALUE,
+    Math.max(0, Math.round(decimalsValue * 100) / 100)
+  );
+  return safe.toFixed(2).replace(".", ",");
 }
 
-function buildResponse({ cep, items, subtotal }) {
-  const itemCount = items.reduce((acc, item) => acc + Math.max(1, Number(item?.qty) || 1), 0);
-  const weightFactor = computeWeightFactor(items);
-  const distanceFactor = estimateDistanceFactor(cep);
-  const safeSubtotal = Number.isFinite(subtotal) && subtotal > 0 ? subtotal : 0;
-  const insurance = Math.min(20, safeSubtotal * INSURANCE_RATE);
+function parseCorreiosPrice(value) {
+  if (typeof value !== "string") return NaN;
+  const normalized = value.replace(/\./g, "").replace(/,/g, ".");
+  return Number(normalized);
+}
 
-  const rawCost =
-    BASE_COST +
-    itemCount * COST_PER_ITEM +
-    weightFactor * COST_PER_WEIGHT_UNIT +
-    distanceFactor * 4.2 +
-    insurance;
+function parseCorreiosPrazo(value) {
+  const prazo = Number.parseInt(value, 10);
+  return Number.isFinite(prazo) && prazo > 0 ? prazo : null;
+}
 
-  const cost = Math.max(MIN_COST, Math.round(rawCost * 100) / 100);
-  const minDays = Math.max(3, Math.round(3 + distanceFactor));
-  const maxDays = minDays + 2;
-  const deliveryEstimate = `${minDays} a ${maxDays} dias úteis`;
+function buildCorreiosUrl({
+  serviceCode,
+  destinationCep,
+  weightKg,
+  declaredValue,
+}) {
+  const params = new URLSearchParams({
+    nCdEmpresa: "",
+    sDsSenha: "",
+    nCdServico: serviceCode,
+    sCepOrigem: ORIGIN.cep,
+    sCepDestino: destinationCep,
+    nVlPeso: weightKg.toFixed(2),
+    nCdFormato: PACKAGE_DIMENSIONS.formato,
+    nVlComprimento: PACKAGE_DIMENSIONS.comprimento.toFixed(1),
+    nVlAltura: PACKAGE_DIMENSIONS.altura.toFixed(1),
+    nVlLargura: PACKAGE_DIMENSIONS.largura.toFixed(1),
+    nVlDiametro: PACKAGE_DIMENSIONS.diametro.toFixed(1),
+    sCdMaoPropria: "N",
+    nVlValorDeclarado: formatDeclaredValueBR(declaredValue),
+    sCdAvisoRecebimento: "N",
+    StrRetorno: "json",
+  });
+
+  return `https://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx/CalcPrecoPrazo?${params.toString()}`;
+}
+
+async function requestCorreiosQuote({ cep, items, subtotal, serviceKey }) {
+  const service = CORREIOS_SERVICES[serviceKey] || CORREIOS_SERVICES[DEFAULT_SERVICE_KEY];
+  const weightKg = computeTotalWeightKg(items);
+  const declaredValue = computeSubtotal(items, subtotal);
+  const url = buildCorreiosUrl({
+    serviceCode: service.code,
+    destinationCep: cep,
+    weightKg,
+    declaredValue,
+  });
+
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    const error = new Error(`Correios HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  const rawText = await response.text();
+  let data;
+  try {
+    data = rawText ? JSON.parse(rawText) : null;
+  } catch (err) {
+    const error = new Error("Resposta inválida dos Correios");
+    error.cause = err;
+    throw error;
+  }
+
+  const serviceList = Array.isArray(data?.Servicos?.cServico)
+    ? data.Servicos.cServico
+    : [];
+  const serviceData = serviceList.find((item) => item?.Codigo === service.code) || serviceList[0];
+
+  if (!serviceData) {
+    throw new Error("Serviço dos Correios indisponível");
+  }
+
+  const errorCode = (serviceData?.Erro || "0").toString().trim();
+  if (errorCode !== "0") {
+    const message = serviceData?.MsgErro || "Não foi possível obter o frete";
+    const error = new Error(message);
+    error.code = errorCode;
+    throw error;
+  }
+
+  const cost = parseCorreiosPrice(serviceData?.Valor);
+  if (!Number.isFinite(cost) || cost <= 0) {
+    throw new Error("Valor de frete não informado pelos Correios");
+  }
+
+  const prazo = parseCorreiosPrazo(serviceData?.PrazoEntrega);
+  const deliveryEstimate = prazo
+    ? `${prazo} dia${prazo > 1 ? "s" : ""} útil${prazo > 1 ? "eis" : ""}`
+    : "Prazo informado pelos Correios no ato da postagem";
 
   return {
     method: "correios",
-    service: "PAC",
-    cost,
+    service: serviceData?.Nome?.trim() || service.name,
+    serviceCode: service.code,
+    cost: Math.round(cost * 100) / 100,
     currency: "BRL",
     deliveryEstimate,
-    deliveryDays: { min: minDays, max: maxDays },
+    deliveryDays: prazo ? { min: prazo, max: prazo } : null,
     calculatedAt: new Date().toISOString(),
+    origin: { ...ORIGIN },
+    originLabel: ORIGIN_LABEL,
+    package: {
+      weightKg,
+      declaredValue: Math.round(declaredValue * 100) / 100,
+      dimensions: { ...PACKAGE_DIMENSIONS },
+    },
   };
 }
 
@@ -93,19 +218,24 @@ module.exports = async function handler(req, res) {
   }
 
   const subtotalValue = Number(payload?.subtotal);
-  const subtotal = Number.isFinite(subtotalValue)
-    ? subtotalValue
-    : items.reduce((sum, item) => {
-        const price = Number(item?.price) || 0;
-        const qty = Math.max(1, Number(item?.qty) || 1);
-        return sum + price * qty;
-      }, 0);
+  const serviceKey = (payload?.service || payload?.method || DEFAULT_SERVICE_KEY)
+    .toString()
+    .toLowerCase();
 
   try {
-    const result = buildResponse({ cep, items, subtotal });
+    const result = await requestCorreiosQuote({
+      cep,
+      items,
+      subtotal: Number.isFinite(subtotalValue) ? subtotalValue : undefined,
+      serviceKey,
+    });
+
     return res.status(200).json(result);
   } catch (err) {
-    console.error("Erro ao calcular frete:", err);
-    return res.status(500).json({ error: "Não foi possível calcular o frete" });
+    console.error("Erro ao consultar frete dos Correios:", err);
+    const message =
+      err?.message ||
+      "Não foi possível calcular o frete com os Correios neste momento.";
+    return res.status(502).json({ error: message });
   }
 };
