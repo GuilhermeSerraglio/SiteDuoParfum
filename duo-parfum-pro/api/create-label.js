@@ -1,4 +1,5 @@
 const { getFirebaseAdmin } = require("./_firebase-admin");
+const { getAccessToken } = require("./melhorenvio-auth");
 
 const ORIGIN = {
   city: "Sorriso",
@@ -97,17 +98,7 @@ function loadSenderConfig() {
 }
 
 function buildMelhorEnvioConfig() {
-  const token = sanitizeString(process.env.MELHOR_ENVIO_API_TOKEN);
-  if (!token) {
-    const error = new Error(
-      "Configuração MELHOR_ENVIO_API_TOKEN ausente. Defina as credenciais da API do Melhor Envio."
-    );
-    error.status = 500;
-    throw error;
-  }
-
   return {
-    token,
     baseUrl: resolveApiBase(),
     userAgent: sanitizeString(process.env.MELHOR_ENVIO_USER_AGENT || "SiteDuoParfum/1.0"),
     agency: sanitizeString(process.env.MELHOR_ENVIO_AGENCY_ID),
@@ -116,10 +107,21 @@ function buildMelhorEnvioConfig() {
 }
 
 async function melhorEnvioRequest(config, path, { method = "GET", body } = {}) {
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (authError) {
+    console.error("Falha ao autenticar no Melhor Envio:", authError);
+    const error = new Error("Falha ao autenticar no Melhor Envio");
+    error.status = 500;
+    error.cause = authError;
+    throw error;
+  }
+
   const url = `${config.baseUrl}${path}`;
   const headers = {
     Accept: "application/json",
-    Authorization: `Bearer ${config.token}`,
+    Authorization: `Bearer ${token}`,
     "User-Agent": config.userAgent,
   };
 
