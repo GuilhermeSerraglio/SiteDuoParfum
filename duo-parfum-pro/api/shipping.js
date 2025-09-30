@@ -1,4 +1,5 @@
 const { parseStringPromise } = require("xml2js");
+const { getAccessToken } = require("./melhorenvio-auth");
 
 const ORIGIN = {
   city: "Sorriso",
@@ -52,6 +53,11 @@ function parseBody(body) {
   return {};
 }
 
+function sanitizeString(value, fallback = "") {
+  if (value === null || value === undefined) return fallback;
+  return String(value).trim();
+}
+
 function sanitizeCep(value = "") {
   return value.toString().replace(/\D/g, "").slice(0, 8);
 }
@@ -100,6 +106,388 @@ function computeCartMetrics(items = [], explicitSubtotal) {
 function formatDeclaredValueBR(value) {
   const safe = Math.min(MAX_DECLARED_VALUE, Math.max(0, Math.round(value * 100) / 100));
   return safe.toFixed(2).replace(".", ",");
+}
+
+function resolveApiBase() {
+  const explicit = sanitizeString(process.env.MELHOR_ENVIO_API_URL);
+  if (explicit) return explicit;
+
+  const env = sanitizeString(process.env.MELHOR_ENVIO_ENV || process.env.MELHOR_ENVIO_MODE).toLowerCase();
+  if (env === "production" || env === "prod") {
+    return "https://www.melhorenvio.com.br/api/v2";
+  }
+
+  return "https://sandbox.melhorenvio.com.br/api/v2";
+}
+
+function loadSenderConfig() {
+  try {
+    const rawJson = sanitizeString(
+      process.env.MELHOR_ENVIO_SENDER_JSON ||
+        process.env.MELHOR_ENVIO_FROM_JSON ||
+        process.env.MELHOR_ENVIO_SENDER ||
+        ""
+    );
+    if (rawJson) {
+      const parsed = JSON.parse(rawJson);
+      if (parsed && typeof parsed === "object") {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn("MELHOR_ENVIO_SENDER_JSON inválido:", err);
+  }
+
+  return {
+    name: sanitizeString(process.env.MELHOR_ENVIO_FROM_NAME || "Duo Parfum"),
+    phone: sanitizeString(process.env.MELHOR_ENVIO_FROM_PHONE),
+    email: sanitizeString(process.env.MELHOR_ENVIO_FROM_EMAIL || process.env.SUPPORT_EMAIL || ""),
+    document: sanitizeString(process.env.MELHOR_ENVIO_FROM_DOCUMENT || process.env.MELHOR_ENVIO_DOCUMENT),
+    postal_code: sanitizeCep(process.env.MELHOR_ENVIO_FROM_CEP || ORIGIN.cep),
+    address: sanitizeString(process.env.MELHOR_ENVIO_FROM_ADDRESS),
+    number: sanitizeString(process.env.MELHOR_ENVIO_FROM_NUMBER),
+    complement: sanitizeString(process.env.MELHOR_ENVIO_FROM_COMPLEMENT),
+    district: sanitizeString(process.env.MELHOR_ENVIO_FROM_DISTRICT),
+    city: sanitizeString(process.env.MELHOR_ENVIO_FROM_CITY || ORIGIN.city),
+    state_abbr: sanitizeString(process.env.MELHOR_ENVIO_FROM_STATE || ORIGIN.state),
+    country: sanitizeString(process.env.MELHOR_ENVIO_FROM_COUNTRY || ORIGIN.country || "BR"),
+  };
+}
+
+function buildMelhorEnvioConfig() {
+  return {
+    baseUrl: resolveApiBase(),
+    userAgent: sanitizeString(process.env.MELHOR_ENVIO_USER_AGENT || "SiteDuoParfum/1.0"),
+    sender: loadSenderConfig(),
+  };
+}
+
+async function melhorEnvioRequest(config, path, { method = "GET", body } = {}) {
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (authError) {
+    console.error("Falha ao autenticar no Melhor Envio:", authError);
+    const error = new Error("Falha ao autenticar no Melhor Envio");
+    error.status = 500;
+    error.cause = authError;
+    throw error;
+  }
+
+  const url = `${config.baseUrl}${path}`;
+  const headers = {
+    Accept: "application/json",
+    Authorization: `Bearer ${token}`,
+    "User-Agent": config.userAgent,
+  };
+
+  let payload;
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    payload = JSON.stringify(body);
+  }
+
+  const response = await fetchFn(url, { method, headers, body: payload });
+  const text = await response.text();
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      console.warn("Resposta não JSON do Melhor Envio em", path, err);
+    }
+  }
+
+  if (!response.ok) {
+    const message = data?.message || data?.error || `Melhor Envio HTTP ${response.status}`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.details = data;
+    throw error;
+  }
+
+  return data;
+}
+
+function resolveServiceId(serviceCode) {
+  const normalized = sanitizeString(serviceCode);
+  if (!normalized) return null;
+  const envDirect = sanitizeString(process.env[`MELHOR_ENVIO_SERVICE_${normalized}`]);
+  if (envDirect) return envDirect;
+  if (normalized === "04014") {
+    return (
+      sanitizeString(process.env.MELHOR_ENVIO_SERVICE_SEDEX) ||
+      sanitizeString(process.env.MELHOR_ENVIO_SERVICE_SEDEX_ID) ||
+      null
+    );
+  }
+  if (normalized === "04510") {
+    return (
+      sanitizeString(process.env.MELHOR_ENVIO_SERVICE_PAC) ||
+      sanitizeString(process.env.MELHOR_ENVIO_SERVICE_PAC_ID) ||
+      null
+    );
+  }
+  return null;
+}
+
+function buildVolumeForMelhorEnvio(metrics = {}) {
+  const billedWeight = Number(Math.max(MIN_BILLABLE_WEIGHT_KG, metrics.billedWeightKg || MIN_BILLABLE_WEIGHT_KG).toFixed(3));
+  return {
+    height: PACKAGE_DIMENSIONS.altura,
+    width: PACKAGE_DIMENSIONS.largura,
+    length: PACKAGE_DIMENSIONS.comprimento,
+    weight: billedWeight,
+  };
+}
+
+function buildMelhorEnvioProducts(items = []) {
+  if (!Array.isArray(items)) return [];
+
+  return items.map((item, index) => {
+    const qty = Math.max(1, toNumber(item?.qty, 1));
+    const rawPrice = toNumber(item?.price, 0);
+    const price = Number.isFinite(rawPrice) ? Math.max(0, rawPrice) : 0;
+    const normalizedPrice = Math.round(price * 100) / 100;
+    return {
+      name: sanitizeString(item?.name || item?.title || `Produto ${index + 1}`),
+      quantity: qty,
+      unitary_value: Number.isFinite(normalizedPrice) ? normalizedPrice : 0,
+    };
+  });
+}
+
+function pickFirstFinite(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const num = Number(value);
+    if (Number.isFinite(num)) {
+      return num;
+    }
+  }
+  return null;
+}
+
+function normalizeDeliveryInfo(quote = {}) {
+  const time = quote?.delivery_time || quote?.deliveryTime || {};
+  const min = pickFirstFinite(time.min, time.from, time.lower, time.days, time.day, quote?.min_delivery_time);
+  const max = pickFirstFinite(time.max, time.to, time.upper, time.days, time.day, quote?.max_delivery_time);
+  const estimate = pickFirstFinite(time.estimate, time.days, quote?.estimated_days);
+
+  let deliveryDays = null;
+  if (min !== null || max !== null) {
+    const minValue = min !== null ? Math.round(min) : (max !== null ? Math.round(max) : null);
+    const maxValue = max !== null ? Math.round(max) : (min !== null ? Math.round(min) : null);
+    deliveryDays = {
+      min: minValue !== null ? Math.max(0, minValue) : null,
+      max: maxValue !== null ? Math.max(0, maxValue) : null,
+    };
+  } else if (estimate !== null) {
+    const rounded = Math.max(0, Math.round(estimate));
+    deliveryDays = { min: rounded, max: rounded };
+  }
+
+  const text =
+    sanitizeString(time.full_text) ||
+    sanitizeString(time.text) ||
+    sanitizeString(time.description) ||
+    sanitizeString(time.humanized) ||
+    sanitizeString(quote?.deliveryRange);
+
+  let deliveryEstimate = text;
+  if (!deliveryEstimate && deliveryDays) {
+    const minValue = deliveryDays.min ?? deliveryDays.max;
+    const maxValue = deliveryDays.max ?? deliveryDays.min;
+    if (minValue !== null && maxValue !== null && minValue !== maxValue) {
+      deliveryEstimate = `${minValue} a ${maxValue} dias úteis`;
+    } else if (minValue !== null) {
+      deliveryEstimate = formatDeliveryEstimate(minValue);
+    }
+  }
+
+  return {
+    deliveryDays,
+    deliveryEstimate,
+  };
+}
+
+async function calculateMelhorEnvioShipping({ destinationCep, items, metrics }) {
+  const config = buildMelhorEnvioConfig();
+  const sender = config.sender || {};
+  const senderCep = sanitizeCep(sender.postal_code || ORIGIN.cep);
+
+  const servicesToRequest = CORREIOS_SERVICES.map((service) => ({
+    ...service,
+    melhorEnvioId: resolveServiceId(service.code),
+  })).filter((service) => service.melhorEnvioId);
+
+  if (!servicesToRequest.length) {
+    const error = new Error("Serviços do Melhor Envio não configurados");
+    error.code = "melhor_envio_service_not_configured";
+    throw error;
+  }
+
+  const declaredValue = metrics.subtotal;
+  const volume = buildVolumeForMelhorEnvio(metrics);
+  const products = buildMelhorEnvioProducts(items);
+
+  const shipments = servicesToRequest.map((service) => ({
+    service: service.melhorEnvioId,
+    from: {
+      postal_code: senderCep,
+      country: "BR",
+    },
+    to: {
+      postal_code: destinationCep,
+      country: "BR",
+    },
+    products,
+    volumes: [volume],
+    options: {
+      receipt: false,
+      own_hand: false,
+      reverse: false,
+      collect: false,
+      non_commercial: true,
+      insurance_value: Number(Math.max(0, declaredValue).toFixed(2)),
+    },
+  }));
+
+  const response = await melhorEnvioRequest(config, "/me/shipment/calculate", {
+    method: "POST",
+    body: shipments,
+  });
+
+  const rawQuotes = Array.isArray(response) ? response : response?.data || [];
+  const mapKey = (value) => sanitizeString(value).toLowerCase();
+  const quotesByService = new Map();
+  rawQuotes.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const id = mapKey(entry.service || entry.service_id || entry.serviceId || entry.id_service || entry.id);
+    if (id) {
+      quotesByService.set(id, entry);
+    }
+  });
+
+  const services = [];
+  const errors = [];
+
+  servicesToRequest.forEach((service) => {
+    const quote = quotesByService.get(mapKey(service.melhorEnvioId));
+    const baseInfo = {
+      method: "melhorenvio",
+      name: service.name,
+      serviceCode: service.code,
+      calculatedAt: new Date().toISOString(),
+    };
+
+    if (!quote) {
+      const message = "Serviço não retornado pelo Melhor Envio";
+      services.push({
+        ...baseInfo,
+        currency: "BRL",
+        cost: null,
+        deliveryEstimate: "",
+        deliveryDays: null,
+        error: message,
+      });
+      errors.push({
+        service: service.name,
+        serviceCode: service.code,
+        message,
+        code: "not_found",
+      });
+      return;
+    }
+
+    const quoteError = quote.error || quote.error_message || quote.message;
+    if (quoteError) {
+      const message = sanitizeString(
+        (typeof quoteError === "string" && quoteError) ||
+          quote?.error?.message ||
+          quote?.error_message ||
+          "Serviço indisponível"
+      ) || "Serviço indisponível";
+      services.push({
+        ...baseInfo,
+        currency: "BRL",
+        cost: null,
+        deliveryEstimate: "",
+        deliveryDays: null,
+        error: message,
+      });
+      errors.push({
+        service: service.name,
+        serviceCode: service.code,
+        message,
+        code: sanitizeString(quote?.error?.code || quote?.error_code || quote?.code || ""),
+      });
+      return;
+    }
+
+    const rawCost = pickFirstFinite(
+      quote.price,
+      quote.total,
+      quote.final_price,
+      quote.cost,
+      quote.delivery_price
+    );
+
+    if (!Number.isFinite(rawCost)) {
+      const message = "Valor de frete não informado pelo Melhor Envio";
+      services.push({
+        ...baseInfo,
+        cost: null,
+        deliveryEstimate: "",
+        deliveryDays: null,
+        error: message,
+      });
+      errors.push({
+        service: service.name,
+        serviceCode: service.code,
+        message,
+        code: "missing_price",
+      });
+      return;
+    }
+
+    const deliveryInfo = normalizeDeliveryInfo(quote);
+    const currency =
+      sanitizeString(quote.currency || quote.currency_code || quote.currencyCode || "BRL") || "BRL";
+
+    services.push({
+      ...baseInfo,
+      currency,
+      cost: Math.round(rawCost * 100) / 100,
+      deliveryEstimate: deliveryInfo.deliveryEstimate || "",
+      deliveryDays: deliveryInfo.deliveryDays,
+      error: null,
+    });
+  });
+
+  const preferredServiceCode =
+    services.find((service) => service.serviceCode === CORREIOS_SERVICES[0].code)?.serviceCode ||
+    services[0]?.serviceCode ||
+    CORREIOS_SERVICES.find((service) => service.key === DEFAULT_SERVICE_KEY)?.code ||
+    null;
+
+  return {
+    origin: { ...ORIGIN },
+    originLabel: ORIGIN_LABEL,
+    destinationCep,
+    itemCount: metrics.quantity,
+    package: {
+      weightKg: metrics.physicalWeightKg,
+      billedWeightKg: metrics.billedWeightKg,
+      declaredValue,
+      dimensions: { ...PACKAGE_DIMENSIONS },
+    },
+    services,
+    errors,
+    calculatedAt: new Date().toISOString(),
+    preferredServiceCode,
+    provider: "melhorenvio",
+  };
 }
 
 function parseCorreiosPrice(value) {
@@ -279,7 +667,7 @@ async function requestCorreiosQuoteForService({
   };
 }
 
-async function calculateCorreiosShipping({ cep, items, subtotal }) {
+async function calculateCorreiosShipping({ cep, items, subtotal, metrics }) {
   const destinationCep = sanitizeCep(cep);
   if (!destinationCep || destinationCep.length !== 8) {
     const error = new Error("CEP inválido para cálculo de frete");
@@ -294,8 +682,11 @@ async function calculateCorreiosShipping({ cep, items, subtotal }) {
     throw error;
   }
 
-  const metrics = computeCartMetrics(normalizedItems, Number(subtotal));
-  const declaredValue = metrics.subtotal;
+  const computedMetrics =
+    metrics && typeof metrics === "object"
+      ? metrics
+      : computeCartMetrics(normalizedItems, Number(subtotal));
+  const declaredValue = computedMetrics.subtotal;
 
   const services = [];
   const errors = [];
@@ -305,7 +696,7 @@ async function calculateCorreiosShipping({ cep, items, subtotal }) {
       const quote = await requestCorreiosQuoteForService({
         service,
         destinationCep,
-        billedWeightKg: metrics.billedWeightKg,
+        billedWeightKg: computedMetrics.billedWeightKg,
         declaredValue,
       });
       services.push(quote);
@@ -343,10 +734,10 @@ async function calculateCorreiosShipping({ cep, items, subtotal }) {
     origin: { ...ORIGIN },
     originLabel: ORIGIN_LABEL,
     destinationCep,
-    itemCount: metrics.quantity,
+    itemCount: computedMetrics.quantity,
     package: {
-      weightKg: metrics.physicalWeightKg,
-      billedWeightKg: metrics.billedWeightKg,
+      weightKg: computedMetrics.physicalWeightKg,
+      billedWeightKg: computedMetrics.billedWeightKg,
       declaredValue,
       dimensions: { ...PACKAGE_DIMENSIONS },
     },
@@ -354,6 +745,7 @@ async function calculateCorreiosShipping({ cep, items, subtotal }) {
     errors,
     calculatedAt: new Date().toISOString(),
     preferredServiceCode,
+    provider: "correios",
   };
 }
 
@@ -365,17 +757,81 @@ module.exports = async function handler(req, res) {
 
   const payload = parseBody(req.body);
   const cep = sanitizeCep(payload?.cep || payload?.zip || "");
+  if (!cep || cep.length !== 8) {
+    return res.status(400).json({ error: "CEP inválido para cálculo de frete" });
+  }
+
   const items = Array.isArray(payload?.items) ? payload.items.filter(Boolean) : [];
+  if (!items.length) {
+    return res.status(400).json({ error: "Nenhum item informado para cálculo de frete" });
+  }
+
   const subtotal = Number(payload?.subtotal);
+  const metrics = computeCartMetrics(items, Number.isFinite(subtotal) ? subtotal : undefined);
 
   try {
-    const result = await calculateCorreiosShipping({
-      cep,
-      items,
-      subtotal: Number.isFinite(subtotal) ? subtotal : undefined,
-    });
+    const shouldUseMelhorEnvio = CORREIOS_SERVICES.some((service) => resolveServiceId(service.code));
+    let melhorEnvioResult = null;
+    let melhorEnvioError = null;
 
-    return res.status(200).json(result);
+    if (shouldUseMelhorEnvio) {
+      try {
+        melhorEnvioResult = await calculateMelhorEnvioShipping({
+          destinationCep: cep,
+          items,
+          metrics,
+        });
+      } catch (err) {
+        console.error("Erro ao consultar frete no Melhor Envio:", err);
+        melhorEnvioError = err;
+      }
+    }
+
+    let responsePayload = melhorEnvioResult;
+
+    const hasValidMelhorEnvioServices =
+      responsePayload &&
+      Array.isArray(responsePayload.services) &&
+      responsePayload.services.some((service) => Number.isFinite(service?.cost));
+
+    if (!hasValidMelhorEnvioServices) {
+      responsePayload = await calculateCorreiosShipping({
+        cep,
+        items,
+        subtotal: metrics.subtotal,
+        metrics,
+      });
+
+      if (!Array.isArray(responsePayload.errors)) {
+        responsePayload.errors = [];
+      }
+
+      if (melhorEnvioError) {
+        responsePayload.errors.push({
+          service: "Melhor Envio",
+          serviceCode: null,
+          message: melhorEnvioError.message || "Não foi possível consultar o Melhor Envio",
+          code: melhorEnvioError.code || melhorEnvioError.status || null,
+        });
+      }
+
+      return res.status(200).json(responsePayload);
+    }
+
+    if (!Array.isArray(responsePayload.errors)) {
+      responsePayload.errors = [];
+    }
+
+    if (melhorEnvioError) {
+      responsePayload.errors.push({
+        service: "Melhor Envio",
+        serviceCode: null,
+        message: melhorEnvioError.message || "Ocorreram problemas ao consultar o Melhor Envio",
+        code: melhorEnvioError.code || melhorEnvioError.status || null,
+      });
+    }
+
+    return res.status(200).json(responsePayload);
   } catch (err) {
     const status = err?.status && Number.isInteger(err.status) ? err.status : 502;
     console.error("Erro ao consultar frete dos Correios:", err);
