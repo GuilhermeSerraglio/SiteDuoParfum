@@ -1,10 +1,42 @@
 const { getFirebaseAdmin } = require("./_firebase-admin");
 
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS ||
-  "guilhermeserraglio03@gmail.com,guilhermeserraglio@gmail.com")
-  .split(",")
-  .map((email) => email.trim().toLowerCase())
-  .filter(Boolean);
+function parseAdminEmails(source) {
+  const fallback = [
+    "guilhermeserraglio03@gmail.com",
+    "guilhermeserraglio@gmail.com",
+  ];
+
+  if (!source || !source.trim()) {
+    return fallback;
+  }
+
+  const normalizedSource = source.trim();
+  let entries = [];
+
+  if (normalizedSource.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(normalizedSource);
+      if (Array.isArray(parsed)) {
+        entries = parsed;
+      }
+    } catch (err) {
+      console.warn("ADMIN_EMAILS não está em JSON válido:", err);
+    }
+  }
+
+  if (!entries.length) {
+    entries = normalizedSource.split(/[;,\n]/);
+  }
+
+  const emails = entries
+    .map((email) => (typeof email === "string" ? email : ""))
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+
+  return emails.length ? emails : fallback;
+}
+
+const ADMIN_EMAILS = parseAdminEmails(process.env.ADMIN_EMAILS);
 
 function parseBody(body) {
   if (!body) return {};
