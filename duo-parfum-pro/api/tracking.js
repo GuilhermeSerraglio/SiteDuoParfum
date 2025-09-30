@@ -1,7 +1,13 @@
 const https = require("https");
 
+const { getFirebaseAdmin } = require("./_firebase-admin");
+
 function sanitizeCode(code = "") {
   return code.toString().toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function sanitizeOrderId(value = "") {
+  return value.toString().trim();
 }
 
 function fetchCorreiosTracking(code) {
@@ -129,6 +135,148 @@ function normalizeCorreiosData(code, payload = {}) {
   };
 }
 
+function sanitizeOrderStatus(status = "") {
+  const normalized = status.toString().toLowerCase();
+  if (["pending", "paid", "sent", "delivered", "canceled"].includes(normalized)) {
+    return normalized;
+  }
+  return "pending";
+}
+
+function determineShippingStatus(events = []) {
+  if (!Array.isArray(events) || !events.length) {
+    return null;
+  }
+
+  const texts = events.map((event) => {
+    const status = (event.status || event.description || "").toLowerCase();
+    const details = (event.details || "").toLowerCase();
+    return `${status} ${details}`.trim();
+  });
+
+  if (texts.some((text) => text.includes("entregue"))) {
+    return "delivered";
+  }
+  if (texts.some((text) => text.includes("saiu para entrega"))) {
+    return "out_for_delivery";
+  }
+  if (texts.some((text) => text.includes("aguardando retirada"))) {
+    return "awaiting_pickup";
+  }
+  if (
+    texts.some((text) =>
+      text.includes("em trânsito") ||
+      text.includes("em transito") ||
+      text.includes("objeto postado") ||
+      text.includes("objeto recebido") ||
+      text.includes("encaminhado") ||
+      text.includes("postado")
+    )
+  ) {
+    return "in_transit";
+  }
+  return "label_generated";
+}
+
+function toFirestoreTimestamp(admin, isoString) {
+  if (!isoString) return null;
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return null;
+  return admin.firestore.Timestamp.fromDate(date);
+}
+
+async function updateTrackingInFirestore({ code, normalized, orderId }) {
+  let admin;
+  try {
+    admin = getFirebaseAdmin();
+  } catch (err) {
+    console.warn("Firebase Admin não disponível para atualizar rastreio", err);
+    return;
+  }
+
+  const db = admin.firestore();
+  let docRef = null;
+  let snapshot = null;
+
+  if (orderId) {
+    docRef = db.collection("orders").doc(orderId);
+    snapshot = await docRef.get();
+  }
+
+  if (!snapshot || !snapshot.exists) {
+    const byTracking = await db.collection("orders").where("trackingCode", "==", code).limit(1).get();
+    if (!byTracking.empty) {
+      docRef = byTracking.docs[0].ref;
+      snapshot = byTracking.docs[0];
+    }
+  }
+
+  if (!snapshot || !snapshot.exists) {
+    const byShippingTracking = await db
+      .collection("orders")
+      .where("shipping.trackingCode", "==", code)
+      .limit(1)
+      .get();
+    if (!byShippingTracking.empty) {
+      docRef = byShippingTracking.docs[0].ref;
+      snapshot = byShippingTracking.docs[0];
+    }
+  }
+
+  if (!snapshot || !snapshot.exists) {
+    console.warn("Pedido não encontrado para sincronizar rastreio", { code, orderId });
+    return;
+  }
+
+  const data = snapshot.data() || {};
+  const shippingData = typeof data.shipping === "object" && data.shipping ? { ...data.shipping } : {};
+  const events = Array.isArray(normalized.events) ? normalized.events : [];
+  const history = events.slice(0, 20).map((event) => {
+    const { raw, ...rest } = event || {};
+    return rest;
+  });
+  const latest = history[0] || null;
+  const shippingStatus = determineShippingStatus(events) || shippingData.trackingStatus || shippingData.status || "";
+
+  const shippingUpdate = {
+    ...shippingData,
+    trackingCode: code,
+    trackingHistory: history,
+    lastTrackingEvent: latest,
+    trackingStatus,
+    status: shippingStatus,
+    trackingUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  if (latest?.timestamp) {
+    const ts = toFirestoreTimestamp(admin, latest.timestamp);
+    if (ts) {
+      shippingUpdate.lastTrackingEventTimestamp = ts;
+    }
+  }
+
+  const updatePayload = {
+    trackingCode: code,
+    shipping: shippingUpdate,
+  };
+
+  const currentStatus = sanitizeOrderStatus(data.status);
+  if (shippingStatus === "delivered") {
+    updatePayload.status = "delivered";
+    if (!data.deliveredAt) {
+      updatePayload.deliveredAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+  } else if (["pending", "paid"].includes(currentStatus) && shippingStatus) {
+    updatePayload.status = "sent";
+  }
+
+  try {
+    await docRef.set(updatePayload, { merge: true });
+  } catch (err) {
+    console.error("Falha ao atualizar pedido com dados de rastreio:", err);
+  }
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
@@ -138,6 +286,9 @@ module.exports = async function handler(req, res) {
   const queryCode = Array.isArray(req.query?.code) ? req.query.code[0] : req.query?.code;
   const bodyCode = Array.isArray(req.body?.code) ? req.body.code[0] : req.body?.code;
   const code = sanitizeCode(queryCode || bodyCode || "");
+  const queryOrderId = Array.isArray(req.query?.orderId) ? req.query.orderId[0] : req.query?.orderId;
+  const bodyOrderId = Array.isArray(req.body?.orderId) ? req.body.orderId[0] : req.body?.orderId;
+  const orderId = sanitizeOrderId(queryOrderId || bodyOrderId || "");
 
   if (!code) {
     return res.status(400).json({ error: "Código de rastreio inválido" });
@@ -146,6 +297,9 @@ module.exports = async function handler(req, res) {
   try {
     const raw = await fetchCorreiosTracking(code);
     const result = normalizeCorreiosData(code, raw);
+    updateTrackingInFirestore({ code: result.code, normalized: result, orderId }).catch((err) => {
+      console.warn("Falha ao sincronizar rastreio no Firestore:", err);
+    });
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
     return res.status(200).json(result);
   } catch (err) {
