@@ -1,3 +1,5 @@
+const { parseStringPromise } = require("xml2js");
+
 const ORIGIN = {
   city: "Sorriso",
   state: "MT",
@@ -6,35 +8,36 @@ const ORIGIN = {
 
 const ORIGIN_LABEL = `${ORIGIN.city} - ${ORIGIN.state}`;
 
-const CORREIOS_SERVICES = {
-  pac: { code: "04510", name: "PAC" },
-  sedex: { code: "04014", name: "SEDEX" },
-};
+const CORREIOS_SERVICES = [
+  { key: "pac", code: "04510", name: "PAC" },
+  { key: "sedex", code: "04014", name: "SEDEX" },
+];
 
 const DEFAULT_SERVICE_KEY = "pac";
 const MAX_DECLARED_VALUE = 10000;
 const MAX_WEIGHT_KG = 30;
-const MIN_REQUEST_WEIGHT_KG = 0.1; // peso mínimo considerado para o cálculo interno
-const MIN_BILLABLE_WEIGHT_KG = 0.3; // peso mínimo aceito pelos Correios
-const PACKAGE_BUFFER_WEIGHT_KG = 0.05; // envelope/embalagem leve
-const BASE_ITEM_WEIGHT_KG = 0.02; // 20g por item quando não houver referência
-
+const MIN_PHYSICAL_WEIGHT_KG = 0.1;
+const MIN_BILLABLE_WEIGHT_KG = 0.3;
+const PACKAGE_BUFFER_WEIGHT_KG = 0.05;
+const ITEM_WEIGHT_KG = 0.045;
 const PACKAGE_DIMENSIONS = {
-  formato: "1", // caixa/pacote
-  comprimento: 16, // cm (mínimo 16)
-  altura: 2, // cm (mínimo 2)
-  largura: 11, // cm (mínimo 11)
-  diametro: 0, // não aplicável
+  formato: "1",
+  comprimento: 16,
+  altura: 2,
+  largura: 11,
+  diametro: 0,
 };
 
-let cachedFetch = typeof fetch === "function" ? fetch : null;
-
-async function ensureFetch() {
-  if (cachedFetch) return cachedFetch;
-  const { default: nodeFetch } = await import("node-fetch");
-  cachedFetch = nodeFetch;
-  return cachedFetch;
+function getFetch() {
+  if (typeof fetch === "function") {
+    return fetch.bind(globalThis);
+  }
+  // eslint-disable-next-line global-require
+  const fetchModule = require("node-fetch");
+  return (fetchModule && fetchModule.default) || fetchModule;
 }
+
+const fetchFn = getFetch();
 
 function parseBody(body) {
   if (!body) return {};
@@ -45,62 +48,57 @@ function parseBody(body) {
       return {};
     }
   }
-  return body;
+  if (typeof body === "object") return body;
+  return {};
 }
 
 function sanitizeCep(value = "") {
   return value.toString().replace(/\D/g, "").slice(0, 8);
 }
 
-function parseMl(value) {
-  if (!value) return 0;
-  const match = value.toString().match(/(\d+[\d,.]*)/);
-  if (!match) return 0;
-  const normalized = match[1].replace(/\./g, "").replace(/,/g, ".");
-  const ml = Number(normalized);
-  return Number.isFinite(ml) && ml > 0 ? ml : 0;
+function toNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function computeItemWeightKg(rawItem = {}) {
-  const qty = Math.max(1, Number(rawItem?.qty) || 1);
-  const weightKg = Number(rawItem?.weightKg || rawItem?.weight || 0);
-  if (Number.isFinite(weightKg) && weightKg > 0) {
-    return qty * Math.min(MAX_WEIGHT_KG, weightKg);
-  }
-  const ml = parseMl(rawItem?.ml);
-  const inferredKg = ml ? ml / 1000 : BASE_ITEM_WEIGHT_KG;
-  return qty * Math.max(BASE_ITEM_WEIGHT_KG, inferredKg);
+function roundKg(value) {
+  return Math.round(value * 1000) / 1000;
 }
 
-function computePhysicalWeightKg(items = []) {
-  const itemsWeight = items.reduce((sum, item) => sum + computeItemWeightKg(item), 0);
-  const total = itemsWeight + PACKAGE_BUFFER_WEIGHT_KG;
-  const bounded = Math.min(MAX_WEIGHT_KG, Math.max(MIN_REQUEST_WEIGHT_KG, total));
-  return Math.round(bounded * 1000) / 1000;
-}
+function computeCartMetrics(items = [], explicitSubtotal) {
+  let quantity = 0;
+  let subtotal = 0;
 
-function computeBillableWeightKg(weightKg) {
-  return Math.round(
-    Math.min(MAX_WEIGHT_KG, Math.max(MIN_BILLABLE_WEIGHT_KG, weightKg)) * 1000
-  ) / 1000;
-}
+  items.forEach((rawItem) => {
+    const qty = Math.max(1, toNumber(rawItem?.qty, 1));
+    quantity += qty;
+    const price = Math.max(0, toNumber(rawItem?.price, 0));
+    subtotal += price * qty;
+  });
 
-function computeSubtotal(items = [], explicitSubtotal) {
   if (Number.isFinite(explicitSubtotal)) {
-    return Math.max(0, explicitSubtotal);
+    subtotal = Math.max(subtotal, explicitSubtotal);
   }
-  return items.reduce((sum, item) => {
-    const price = Number(item?.price) || 0;
-    const qty = Math.max(1, Number(item?.qty) || 1);
-    return sum + price * qty;
-  }, 0);
+
+  const physicalWeight = Math.min(
+    MAX_WEIGHT_KG,
+    Math.max(MIN_PHYSICAL_WEIGHT_KG, quantity * ITEM_WEIGHT_KG + PACKAGE_BUFFER_WEIGHT_KG)
+  );
+  const billedWeight = Math.min(
+    MAX_WEIGHT_KG,
+    Math.max(MIN_BILLABLE_WEIGHT_KG, physicalWeight)
+  );
+
+  return {
+    quantity,
+    subtotal: Math.round(subtotal * 100) / 100,
+    physicalWeightKg: roundKg(physicalWeight),
+    billedWeightKg: roundKg(billedWeight),
+  };
 }
 
-function formatDeclaredValueBR(decimalsValue) {
-  const safe = Math.min(
-    MAX_DECLARED_VALUE,
-    Math.max(0, Math.round(decimalsValue * 100) / 100)
-  );
+function formatDeclaredValueBR(value) {
+  const safe = Math.min(MAX_DECLARED_VALUE, Math.max(0, Math.round(value * 100) / 100));
   return safe.toFixed(2).replace(".", ",");
 }
 
@@ -115,71 +113,66 @@ function parseCorreiosPrazo(value) {
   return Number.isFinite(prazo) && prazo > 0 ? prazo : null;
 }
 
-function decodeHtmlEntities(value = "") {
-  return value
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&apos;/gi, "'")
-    .replace(/&amp;/gi, "&")
-    .replace(/&#(\d+);/g, (_, code) => {
-      const num = Number(code);
-      return Number.isFinite(num) ? String.fromCharCode(num) : _;
-    });
-}
+async function parseCorreiosResponse(raw) {
+  if (!raw) return null;
 
-function parseCorreiosXml(text) {
-  if (typeof text !== "string" || !text.trim()) {
-    return null;
+  if (typeof raw === "object") {
+    return raw;
   }
 
-  const serviceMatches = Array.from(text.matchAll(/<cServico>([\s\S]*?)<\/cServico>/gi));
-  if (!serviceMatches.length) {
-    return null;
-  }
-
-  const services = serviceMatches.map((match) => {
-    const chunk = match[1];
-    const fields = {};
-    chunk.replace(/<([A-Za-z0-9]+)>([\s\S]*?)<\/\1>/g, (_, tag, value) => {
-      fields[tag] = decodeHtmlEntities(value.trim());
-      return "";
-    });
-    return fields;
-  });
-
-  return { Servicos: { cServico: services } };
-}
-
-function parseCorreiosResponse(rawText) {
-  if (!rawText) return null;
-
-  if (typeof rawText === "object") {
-    return rawText;
-  }
-
-  if (typeof rawText === "string") {
+  if (typeof raw === "string") {
     try {
-      const data = JSON.parse(rawText);
-      if (data && typeof data === "object") {
-        return data;
+      const json = JSON.parse(raw);
+      if (json && typeof json === "object") {
+        return json;
       }
     } catch (err) {
-      // ignore JSON parse errors and try XML fallback
+      // ignore JSON parse error and fallback to XML
     }
 
-    return parseCorreiosXml(rawText);
+    try {
+      const xml = await parseStringPromise(raw, {
+        explicitArray: false,
+        ignoreAttrs: true,
+        trim: true,
+      });
+      return xml;
+    } catch (err) {
+      return null;
+    }
   }
 
   return null;
 }
 
-function buildCorreiosUrl({
-  serviceCode,
-  destinationCep,
-  weightKg,
-  declaredValue,
-}) {
+function normalizeCorreiosService(rawService = {}) {
+  const normalized = {};
+  Object.keys(rawService || {}).forEach((key) => {
+    normalized[key.toLowerCase()] = rawService[key];
+  });
+  return normalized;
+}
+
+function extractCorreiosServices(data) {
+  if (!data || typeof data !== "object") return [];
+
+  const servicos =
+    data.Servicos ||
+    data.servicos ||
+    data.CResultado ||
+    data.cResultado ||
+    data.cservico ||
+    null;
+
+  if (!servicos) return [];
+
+  const list = servicos.cServico || servicos.CServico || servicos.servico || servicos.Servico;
+  if (!list) return [];
+  if (Array.isArray(list)) return list;
+  return [list];
+}
+
+function buildCorreiosUrl({ serviceCode, destinationCep, weightKg, declaredValue }) {
   const params = new URLSearchParams({
     nCdEmpresa: "",
     sDsSenha: "",
@@ -201,20 +194,27 @@ function buildCorreiosUrl({
   return `https://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx/CalcPrecoPrazo?${params.toString()}`;
 }
 
-async function requestCorreiosQuote({ cep, items, subtotal, serviceKey }) {
-  const service = CORREIOS_SERVICES[serviceKey] || CORREIOS_SERVICES[DEFAULT_SERVICE_KEY];
-  const physicalWeightKg = computePhysicalWeightKg(items);
-  const billedWeightKg = computeBillableWeightKg(physicalWeightKg);
-  const declaredValue = computeSubtotal(items, subtotal);
+function formatDeliveryEstimate(prazo) {
+  if (!prazo) {
+    return "Prazo informado pelos Correios no ato da postagem";
+  }
+  return `${prazo} dia${prazo > 1 ? "s" : ""} útil${prazo > 1 ? "eis" : ""}`;
+}
+
+async function requestCorreiosQuoteForService({
+  service,
+  destinationCep,
+  billedWeightKg,
+  declaredValue,
+}) {
   const url = buildCorreiosUrl({
     serviceCode: service.code,
-    destinationCep: cep,
+    destinationCep,
     weightKg: billedWeightKg,
     declaredValue,
   });
 
-  const fetchFn = await ensureFetch();
-  const response = await fetchFn(url, { cache: "no-store" });
+  const response = await fetchFn(url, { method: "GET", cache: "no-store" });
   if (!response.ok) {
     const error = new Error(`Correios HTTP ${response.status}`);
     error.status = response.status;
@@ -222,57 +222,138 @@ async function requestCorreiosQuote({ cep, items, subtotal, serviceKey }) {
   }
 
   const rawText = await response.text();
-  const data = parseCorreiosResponse(rawText);
+  const data = await parseCorreiosResponse(rawText);
   if (!data) {
     const error = new Error("Resposta inválida dos Correios");
     error.response = rawText;
     throw error;
   }
 
-  const serviceList = Array.isArray(data?.Servicos?.cServico)
-    ? data.Servicos.cServico
-    : [];
-  const serviceData = serviceList.find((item) => item?.Codigo === service.code) || serviceList[0];
+  const serviceList = extractCorreiosServices(data).map(normalizeCorreiosService);
+  if (!serviceList.length) {
+    throw new Error("Serviço dos Correios indisponível");
+  }
+
+  const normalizedCode = service.code.toLowerCase();
+  const serviceData =
+    serviceList.find((item) => (item.codigo || item.code || "").toString() === service.code) ||
+    serviceList.find((item) => (item.codigo || item.code || "").toString().toLowerCase() === normalizedCode) ||
+    serviceList[0];
 
   if (!serviceData) {
     throw new Error("Serviço dos Correios indisponível");
   }
 
-  const errorCode = (serviceData?.Erro || "0").toString().trim();
-  if (errorCode !== "0") {
-    const message = serviceData?.MsgErro || "Não foi possível obter o frete";
-    const error = new Error(message);
-    error.code = errorCode;
-    throw error;
+  const errorCode = (serviceData.erro || serviceData.error || "0").toString().trim();
+  if (errorCode && errorCode !== "0") {
+    const message =
+      serviceData.msgerro ||
+      serviceData.mensagem ||
+      serviceData.msgErro ||
+      serviceData.msgerro ||
+      "Não foi possível obter o frete";
+    const err = new Error(message);
+    err.code = errorCode;
+    throw err;
   }
 
-  const cost = parseCorreiosPrice(serviceData?.Valor);
+  const cost = parseCorreiosPrice(serviceData.valor || serviceData.custo || serviceData.valorcomdesconto);
   if (!Number.isFinite(cost) || cost <= 0) {
     throw new Error("Valor de frete não informado pelos Correios");
   }
 
-  const prazo = parseCorreiosPrazo(serviceData?.PrazoEntrega);
-  const deliveryEstimate = prazo
-    ? `${prazo} dia${prazo > 1 ? "s" : ""} útil${prazo > 1 ? "eis" : ""}`
-    : "Prazo informado pelos Correios no ato da postagem";
+  const prazo =
+    parseCorreiosPrazo(serviceData.prazoentrega || serviceData.prazo || serviceData.prazoEntrega) ||
+    null;
 
   return {
     method: "correios",
-    service: serviceData?.Nome?.trim() || service.name,
+    name: serviceData.nome?.trim() || service.name,
     serviceCode: service.code,
     cost: Math.round(cost * 100) / 100,
     currency: "BRL",
-    deliveryEstimate,
+    deliveryEstimate: formatDeliveryEstimate(prazo),
     deliveryDays: prazo ? { min: prazo, max: prazo } : null,
     calculatedAt: new Date().toISOString(),
+    error: null,
+  };
+}
+
+async function calculateCorreiosShipping({ cep, items, subtotal }) {
+  const destinationCep = sanitizeCep(cep);
+  if (!destinationCep || destinationCep.length !== 8) {
+    const error = new Error("CEP inválido para cálculo de frete");
+    error.status = 400;
+    throw error;
+  }
+
+  const normalizedItems = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (!normalizedItems.length) {
+    const error = new Error("Nenhum item informado para cálculo de frete");
+    error.status = 400;
+    throw error;
+  }
+
+  const metrics = computeCartMetrics(normalizedItems, Number(subtotal));
+  const declaredValue = metrics.subtotal;
+
+  const services = [];
+  const errors = [];
+
+  for (const service of CORREIOS_SERVICES) {
+    try {
+      const quote = await requestCorreiosQuoteForService({
+        service,
+        destinationCep,
+        billedWeightKg: metrics.billedWeightKg,
+        declaredValue,
+      });
+      services.push(quote);
+    } catch (err) {
+      services.push({
+        method: "correios",
+        name: service.name,
+        serviceCode: service.code,
+        cost: null,
+        currency: "BRL",
+        deliveryEstimate: "",
+        deliveryDays: null,
+        calculatedAt: new Date().toISOString(),
+        error: err?.message || "Serviço indisponível",
+      });
+      errors.push({
+        service: service.name,
+        serviceCode: service.code,
+        message: err?.message || "Serviço indisponível",
+        code: err?.code || null,
+      });
+    }
+  }
+
+  const validServices = services.filter((service) => Number.isFinite(service.cost) && !service.error);
+  validServices.sort((a, b) => a.cost - b.cost);
+
+  const preferredServiceCode =
+    validServices.find((service) => service.serviceCode === CORREIOS_SERVICES[0].code)?.serviceCode ||
+    validServices[0]?.serviceCode ||
+    CORREIOS_SERVICES.find((service) => service.key === DEFAULT_SERVICE_KEY)?.code ||
+    null;
+
+  return {
     origin: { ...ORIGIN },
     originLabel: ORIGIN_LABEL,
+    destinationCep,
+    itemCount: metrics.quantity,
     package: {
-      weightKg: physicalWeightKg,
-      billedWeightKg,
-      declaredValue: Math.round(declaredValue * 100) / 100,
+      weightKg: metrics.physicalWeightKg,
+      billedWeightKg: metrics.billedWeightKg,
+      declaredValue,
       dimensions: { ...PACKAGE_DIMENSIONS },
     },
+    services,
+    errors,
+    calculatedAt: new Date().toISOString(),
+    preferredServiceCode,
   };
 }
 
@@ -284,34 +365,22 @@ module.exports = async function handler(req, res) {
 
   const payload = parseBody(req.body);
   const cep = sanitizeCep(payload?.cep || payload?.zip || "");
-  if (!cep || cep.length !== 8) {
-    return res.status(400).json({ error: "CEP inválido para cálculo de frete" });
-  }
-
   const items = Array.isArray(payload?.items) ? payload.items.filter(Boolean) : [];
-  if (!items.length) {
-    return res.status(400).json({ error: "Nenhum item informado para cálculo de frete" });
-  }
-
-  const subtotalValue = Number(payload?.subtotal);
-  const serviceKey = (payload?.service || payload?.method || DEFAULT_SERVICE_KEY)
-    .toString()
-    .toLowerCase();
+  const subtotal = Number(payload?.subtotal);
 
   try {
-    const result = await requestCorreiosQuote({
+    const result = await calculateCorreiosShipping({
       cep,
       items,
-      subtotal: Number.isFinite(subtotalValue) ? subtotalValue : undefined,
-      serviceKey,
+      subtotal: Number.isFinite(subtotal) ? subtotal : undefined,
     });
 
     return res.status(200).json(result);
   } catch (err) {
+    const status = err?.status && Number.isInteger(err.status) ? err.status : 502;
     console.error("Erro ao consultar frete dos Correios:", err);
     const message =
-      err?.message ||
-      "Não foi possível calcular o frete com os Correios neste momento.";
-    return res.status(502).json({ error: message });
+      err?.message || "Não foi possível calcular o frete com os Correios neste momento.";
+    return res.status(status).json({ error: message });
   }
 };
