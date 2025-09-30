@@ -1,53 +1,65 @@
 const https = require("https");
-
+const { getAccessToken } = require("./melhorenvio-auth");
 const { getFirebaseAdmin } = require("./_firebase-admin");
 
+/**
+ * Utils
+ */
+function sanitizeString(value, fallback = "") {
+  if (value === null || value === undefined) return fallback;
+  return String(value).trim();
+}
 function sanitizeCode(code = "") {
   return code.toString().toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
-
 function sanitizeOrderId(value = "") {
   return value.toString().trim();
 }
+function toIsoString(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString();
+}
+function sanitizeOrderStatus(status = "") {
+  const normalized = status.toString().toLowerCase();
+  if (["pending", "paid", "sent", "delivered", "canceled"].includes(normalized)) {
+    return normalized;
+  }
+  return "pending";
+}
 
+/**
+ * Correios tracking
+ */
 function fetchCorreiosTracking(code) {
   const url = `https://proxyapp.correios.com.br/v1/sro-rastro/${encodeURIComponent(code)}`;
   return new Promise((resolve, reject) => {
     const req = https.get(url, { timeout: 10000 }, (res) => {
       let raw = "";
       res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        raw += chunk;
-      });
+      res.on("data", (chunk) => (raw += chunk));
       res.on("end", () => {
         let data = {};
         if (raw) {
           try {
             data = JSON.parse(raw);
-          } catch (err) {
+          } catch {
             if (res.statusCode >= 200 && res.statusCode < 300) {
               return reject(new Error("Resposta inválida dos Correios"));
             }
-            data = {};
           }
         }
-
         if (res.statusCode < 200 || res.statusCode >= 300) {
           const message = data?.mensagem || data?.message || `Correios HTTP ${res.statusCode}`;
           const error = new Error(message);
           error.status = res.statusCode;
-          error.details = data;
           return reject(error);
         }
-
         resolve(data || {});
       });
     });
-
-    req.on("error", (err) => {
-      reject(err);
-    });
-
+    req.on("error", reject);
     req.on("timeout", () => {
       req.destroy();
       reject(new Error("Tempo excedido na consulta aos Correios"));
@@ -57,152 +69,95 @@ function fetchCorreiosTracking(code) {
 
 function normalizeLocation(unidade = {}, destino = {}) {
   const parts = [];
-  const origemParts = [];
-  if (unidade.local) origemParts.push(unidade.local);
-  const origemCidade = [unidade.cidade, unidade.uf].filter(Boolean).join(" - ");
-  if (origemCidade) origemParts.push(origemCidade);
-  if (origemParts.length) parts.push(origemParts.join(" • "));
-
-  const destinoParts = [];
-  if (destino.local) destinoParts.push(destino.local);
-  const destinoCidade = [destino.cidade, destino.uf].filter(Boolean).join(" - ");
-  if (destinoCidade) destinoParts.push(destinoCidade);
-  if (destinoParts.length) {
-    const destinoText = destinoParts.join(" • ");
-    if (parts.length) {
-      parts.push(`Destino: ${destinoText}`);
-    } else {
-      parts.push(destinoText);
-    }
-  }
-
+  const origem = [unidade.local, [unidade.cidade, unidade.uf].filter(Boolean).join(" - ")].filter(Boolean).join(" • ");
+  if (origem) parts.push(origem);
+  const destinoText = [destino.local, [destino.cidade, destino.uf].filter(Boolean).join(" - ")].filter(Boolean).join(" • ");
+  if (destinoText) parts.push(`Destino: ${destinoText}`);
   return parts.join(" · ");
-}
-
-function toIsoString(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toISOString();
 }
 
 function normalizeEvent(event = {}) {
   const description = event.descricao || event.description || "";
   const status = event.status || description;
-  const details = event.detalhe || event.detalhes || event.details || "";
+  const details = event.detalhe || event.details || "";
   const timestamp = toIsoString(event.dtHrCriado || event.dataHora || event.horario);
   let date = event.data || "";
   let time = event.hora || "";
   if ((!date || !time) && timestamp) {
     const dt = new Date(timestamp);
-    if (!Number.isNaN(dt.getTime())) {
-      if (!date) date = dt.toISOString().slice(0, 10);
-      if (!time) time = dt.toISOString().slice(11, 16);
-    }
+    if (!date) date = dt.toISOString().slice(0, 10);
+    if (!time) time = dt.toISOString().slice(11, 16);
   }
-  const location = normalizeLocation(event.unidade || {}, event.unidadeDestino || {});
-
   return {
-    code: event.codigo || event.cod || "",
-    status: status || "",
-    description: description || "",
-    details: details || "",
+    code: event.codigo || "",
+    status,
+    description,
+    details,
     date,
     time,
     timestamp,
-    location,
+    location: normalizeLocation(event.unidade || {}, event.unidadeDestino || {}),
     raw: event,
   };
 }
 
 function normalizeCorreiosData(code, payload = {}) {
   const objetos = Array.isArray(payload.objetos) ? payload.objetos : [];
-  const normalizedCode = sanitizeCode(code);
-  const objeto =
-    objetos.find((item) => sanitizeCode(item?.codObjeto) === normalizedCode) || objetos[0] || {};
+  const objeto = objetos.find((item) => sanitizeCode(item?.codObjeto) === sanitizeCode(code)) || objetos[0] || {};
   const events = Array.isArray(objeto.eventos) ? objeto.eventos.map(normalizeEvent) : [];
-  const filteredEvents = events.filter(Boolean);
-  filteredEvents.sort((a, b) => {
-    const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-    const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-    return timeB - timeA;
+  events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  return { code: sanitizeCode(objeto.codObjeto || code), events, raw: objeto, provider: "correios" };
+}
+
+/**
+ * Melhor Envio tracking
+ */
+function resolveApiBase() {
+  const explicit = sanitizeString(process.env.MELHOR_ENVIO_API_URL);
+  if (explicit) return explicit;
+  const env = sanitizeString(process.env.MELHOR_ENVIO_ENV || "").toLowerCase();
+  return env === "production" ? "https://www.melhorenvio.com.br/api/v2" : "https://sandbox.melhorenvio.com.br/api/v2";
+}
+
+async function melhorEnvioRequest(path) {
+  const token = await getAccessToken();
+  const res = await fetch(`${resolveApiBase()}${path}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": "SiteDuoParfum/1.0" },
   });
-
-  return {
-    code: sanitizeCode(objeto.codObjeto || normalizedCode),
-    events: filteredEvents,
-    raw: objeto,
-  };
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.message || `Erro Melhor Envio ${res.status}`);
+  return data;
 }
 
-function sanitizeOrderStatus(status = "") {
-  const normalized = status.toString().toLowerCase();
-  if (["pending", "paid", "sent", "delivered", "canceled"].includes(normalized)) {
-    return normalized;
-  }
-  return "pending";
+function normalizeMelhorEnvioData(code, payload = {}) {
+  const events = []
+    .concat(payload?.tracking?.events || [], payload?.events || [], payload?.history || [])
+    .map((e) => ({
+      code: sanitizeString(e.code || ""),
+      status: sanitizeString(e.status || e.description || ""),
+      description: sanitizeString(e.description || ""),
+      details: sanitizeString(e.details || ""),
+      timestamp: toIsoString(e.created_at || e.updated_at),
+      raw: e,
+    }))
+    .filter(Boolean);
+  events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  return { code: sanitizeCode(code), events, raw: payload, provider: "melhorenvio" };
 }
 
-function determineShippingStatus(events = []) {
-  if (!Array.isArray(events) || !events.length) {
-    return null;
-  }
-
-  const texts = events.map((event) => {
-    const status = (event.status || event.description || "").toLowerCase();
-    const details = (event.details || "").toLowerCase();
-    return `${status} ${details}`.trim();
-  });
-
-  if (texts.some((text) => text.includes("entregue"))) {
-    return "delivered";
-  }
-  if (texts.some((text) => text.includes("saiu para entrega"))) {
-    return "out_for_delivery";
-  }
-  if (texts.some((text) => text.includes("aguardando retirada"))) {
-    return "awaiting_pickup";
-  }
-  if (
-    texts.some((text) =>
-      text.includes("em trânsito") ||
-      text.includes("em transito") ||
-      text.includes("objeto postado") ||
-      text.includes("objeto recebido") ||
-      text.includes("encaminhado") ||
-      text.includes("postado")
-    )
-  ) {
-    return "in_transit";
-  }
-  return "label_generated";
-}
-
-function toFirestoreTimestamp(admin, isoString) {
-  if (!isoString) return null;
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) return null;
-  return admin.firestore.Timestamp.fromDate(date);
-}
-
+/**
+ * Firestore sync
+ */
 async function updateTrackingInFirestore({ code, normalized, orderId }) {
   let admin;
   try {
     admin = getFirebaseAdmin();
-  } catch (err) {
-    console.warn("Firebase Admin não disponível para atualizar rastreio", err);
+  } catch {
     return;
   }
-
   const db = admin.firestore();
-  let docRef = null;
-  let snapshot = null;
-
-  if (orderId) {
-    docRef = db.collection("orders").doc(orderId);
-    snapshot = await docRef.get();
-  }
-
+  let docRef = orderId ? db.collection("orders").doc(orderId) : null;
+  let snapshot = docRef ? await docRef.get() : null;
   if (!snapshot || !snapshot.exists) {
     const byTracking = await db.collection("orders").where("trackingCode", "==", code).limit(1).get();
     if (!byTracking.empty) {
@@ -210,101 +165,60 @@ async function updateTrackingInFirestore({ code, normalized, orderId }) {
       snapshot = byTracking.docs[0];
     }
   }
-
-  if (!snapshot || !snapshot.exists) {
-    const byShippingTracking = await db
-      .collection("orders")
-      .where("shipping.trackingCode", "==", code)
-      .limit(1)
-      .get();
-    if (!byShippingTracking.empty) {
-      docRef = byShippingTracking.docs[0].ref;
-      snapshot = byShippingTracking.docs[0];
-    }
-  }
-
-  if (!snapshot || !snapshot.exists) {
-    console.warn("Pedido não encontrado para sincronizar rastreio", { code, orderId });
-    return;
-  }
+  if (!snapshot || !snapshot.exists) return;
 
   const data = snapshot.data() || {};
-  const shippingData = typeof data.shipping === "object" && data.shipping ? { ...data.shipping } : {};
-  const events = Array.isArray(normalized.events) ? normalized.events : [];
-  const history = events.slice(0, 20).map((event) => {
-    const { raw, ...rest } = event || {};
-    return rest;
-  });
-  const latest = history[0] || null;
-  const shippingStatus = determineShippingStatus(events) || shippingData.trackingStatus || shippingData.status || "";
-
-  const shippingUpdate = {
-    ...shippingData,
-    trackingCode: code,
-    trackingHistory: history,
-    lastTrackingEvent: latest,
-    trackingStatus,
-    status: shippingStatus,
-    trackingUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
-
-  if (latest?.timestamp) {
-    const ts = toFirestoreTimestamp(admin, latest.timestamp);
-    if (ts) {
-      shippingUpdate.lastTrackingEventTimestamp = ts;
-    }
-  }
-
+  const events = normalized.events || [];
+  const latest = events[0] || null;
+  const shippingStatus = latest?.status || "pending";
   const updatePayload = {
     trackingCode: code,
-    shipping: shippingUpdate,
+    shipping: {
+      ...data.shipping,
+      trackingCode: code,
+      trackingHistory: events,
+      lastTrackingEvent: latest,
+      trackingStatus: shippingStatus,
+      trackingUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
   };
-
-  const currentStatus = sanitizeOrderStatus(data.status);
   if (shippingStatus === "delivered") {
     updatePayload.status = "delivered";
-    if (!data.deliveredAt) {
-      updatePayload.deliveredAt = admin.firestore.FieldValue.serverTimestamp();
-    }
-  } else if (["pending", "paid"].includes(currentStatus) && shippingStatus) {
+    updatePayload.deliveredAt = admin.firestore.FieldValue.serverTimestamp();
+  } else if (["pending", "paid"].includes(data.status)) {
     updatePayload.status = "sent";
   }
-
-  try {
-    await docRef.set(updatePayload, { merge: true });
-  } catch (err) {
-    console.error("Falha ao atualizar pedido com dados de rastreio:", err);
-  }
+  await docRef.set(updatePayload, { merge: true });
 }
 
+/**
+ * Handler
+ */
 module.exports = async function handler(req, res) {
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
     return res.status(405).json({ error: "Método não permitido" });
   }
 
-  const queryCode = Array.isArray(req.query?.code) ? req.query.code[0] : req.query?.code;
-  const bodyCode = Array.isArray(req.body?.code) ? req.body.code[0] : req.body?.code;
-  const code = sanitizeCode(queryCode || bodyCode || "");
-  const queryOrderId = Array.isArray(req.query?.orderId) ? req.query.orderId[0] : req.query?.orderId;
-  const bodyOrderId = Array.isArray(req.body?.orderId) ? req.body.orderId[0] : req.body?.orderId;
-  const orderId = sanitizeOrderId(queryOrderId || bodyOrderId || "");
-
-  if (!code) {
-    return res.status(400).json({ error: "Código de rastreio inválido" });
-  }
+  const code = sanitizeCode(req.query?.code || req.body?.code || "");
+  const orderId = sanitizeOrderId(req.query?.orderId || req.body?.orderId || "");
+  if (!code) return res.status(400).json({ error: "Código de rastreio inválido" });
 
   try {
-    const raw = await fetchCorreiosTracking(code);
-    const result = normalizeCorreiosData(code, raw);
-    updateTrackingInFirestore({ code: result.code, normalized: result, orderId }).catch((err) => {
-      console.warn("Falha ao sincronizar rastreio no Firestore:", err);
-    });
+    let result;
+    try {
+      const orderInfo = await melhorEnvioRequest(`/me/tracking/${encodeURIComponent(code)}`);
+      result = normalizeMelhorEnvioData(code, orderInfo);
+    } catch (err) {
+      console.warn("Erro Melhor Envio:", err.message);
+      const raw = await fetchCorreiosTracking(code);
+      result = normalizeCorreiosData(code, raw);
+    }
+    updateTrackingInFirestore({ code, normalized: result, orderId }).catch(console.error);
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
     return res.status(200).json(result);
   } catch (err) {
-    console.error("Erro ao consultar rastreio dos Correios:", err);
-    const message = err?.message || "Falha ao consultar os Correios";
-    return res.status(502).json({ error: message });
+    console.error("Erro ao consultar rastreio:", err);
+    return res.status(502).json({ error: err.message || "Falha ao consultar rastreio" });
   }
 };

@@ -1,4 +1,5 @@
 const { parseStringPromise } = require("xml2js");
+const { getAccessToken } = require("./melhorenvio-auth");
 
 const ORIGIN = {
   city: "Sorriso",
@@ -29,14 +30,10 @@ const PACKAGE_DIMENSIONS = {
 };
 
 function getFetch() {
-  if (typeof fetch === "function") {
-    return fetch.bind(globalThis);
-  }
-  // eslint-disable-next-line global-require
+  if (typeof fetch === "function") return fetch.bind(globalThis);
   const fetchModule = require("node-fetch");
   return (fetchModule && fetchModule.default) || fetchModule;
 }
-
 const fetchFn = getFetch();
 
 function parseBody(body) {
@@ -44,12 +41,17 @@ function parseBody(body) {
   if (typeof body === "string") {
     try {
       return JSON.parse(body);
-    } catch (err) {
+    } catch {
       return {};
     }
   }
   if (typeof body === "object") return body;
   return {};
+}
+
+function sanitizeString(value, fallback = "") {
+  if (value === null || value === undefined) return fallback;
+  return String(value).trim();
 }
 
 function sanitizeCep(value = "") {
@@ -84,10 +86,7 @@ function computeCartMetrics(items = [], explicitSubtotal) {
     MAX_WEIGHT_KG,
     Math.max(MIN_PHYSICAL_WEIGHT_KG, quantity * ITEM_WEIGHT_KG + PACKAGE_BUFFER_WEIGHT_KG)
   );
-  const billedWeight = Math.min(
-    MAX_WEIGHT_KG,
-    Math.max(MIN_BILLABLE_WEIGHT_KG, physicalWeight)
-  );
+  const billedWeight = Math.min(MAX_WEIGHT_KG, Math.max(MIN_BILLABLE_WEIGHT_KG, physicalWeight));
 
   return {
     quantity,
@@ -102,285 +101,225 @@ function formatDeclaredValueBR(value) {
   return safe.toFixed(2).replace(".", ",");
 }
 
-function parseCorreiosPrice(value) {
-  if (typeof value !== "string") return NaN;
-  const normalized = value.replace(/\./g, "").replace(/,/g, ".");
-  return Number(normalized);
+/**
+ * -----------------------------
+ * Melhor Envio integração
+ * -----------------------------
+ */
+function resolveApiBase() {
+  const explicit = sanitizeString(process.env.MELHOR_ENVIO_API_URL);
+  if (explicit) return explicit;
+  const env = sanitizeString(process.env.MELHOR_ENVIO_ENV || process.env.MELHOR_ENVIO_MODE).toLowerCase();
+  if (env === "production" || env === "prod") {
+    return "https://www.melhorenvio.com.br/api/v2";
+  }
+  return "https://sandbox.melhorenvio.com.br/api/v2";
 }
 
-function parseCorreiosPrazo(value) {
-  const prazo = Number.parseInt(value, 10);
-  return Number.isFinite(prazo) && prazo > 0 ? prazo : null;
+function loadSenderConfig() {
+  try {
+    const rawJson = sanitizeString(
+      process.env.MELHOR_ENVIO_SENDER_JSON ||
+        process.env.MELHOR_ENVIO_FROM_JSON ||
+        process.env.MELHOR_ENVIO_SENDER ||
+        ""
+    );
+    if (rawJson) return JSON.parse(rawJson);
+  } catch {}
+  return {
+    name: sanitizeString(process.env.MELHOR_ENVIO_FROM_NAME || "Duo Parfum"),
+    phone: sanitizeString(process.env.MELHOR_ENVIO_FROM_PHONE),
+    email: sanitizeString(process.env.MELHOR_ENVIO_FROM_EMAIL || ""),
+    document: sanitizeString(process.env.MELHOR_ENVIO_FROM_DOCUMENT),
+    postal_code: sanitizeCep(process.env.MELHOR_ENVIO_FROM_CEP || ORIGIN.cep),
+    address: sanitizeString(process.env.MELHOR_ENVIO_FROM_ADDRESS),
+    number: sanitizeString(process.env.MELHOR_ENVIO_FROM_NUMBER),
+    district: sanitizeString(process.env.MELHOR_ENVIO_FROM_DISTRICT),
+    city: sanitizeString(process.env.MELHOR_ENVIO_FROM_CITY || ORIGIN.city),
+    state_abbr: sanitizeString(process.env.MELHOR_ENVIO_FROM_STATE || ORIGIN.state),
+    country: "BR",
+  };
 }
 
-async function parseCorreiosResponse(raw) {
-  if (!raw) return null;
+function buildMelhorEnvioConfig() {
+  return {
+    baseUrl: resolveApiBase(),
+    userAgent: "SiteDuoParfum/1.0",
+    sender: loadSenderConfig(),
+  };
+}
 
-  if (typeof raw === "object") {
-    return raw;
+async function melhorEnvioRequest(config, path, { method = "GET", body } = {}) {
+  const token = await getAccessToken();
+  const url = `${config.baseUrl}${path}`;
+  const headers = {
+    Accept: "application/json",
+    Authorization: `Bearer ${token}`,
+    "User-Agent": config.userAgent,
+  };
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(body);
   }
+  const response = await fetchFn(url, { method, headers, body });
+  const text = await response.text();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {}
+  if (!response.ok) throw new Error(data?.message || `Erro Melhor Envio ${response.status}`);
+  return data;
+}
 
-  if (typeof raw === "string") {
-    try {
-      const json = JSON.parse(raw);
-      if (json && typeof json === "object") {
-        return json;
-      }
-    } catch (err) {
-      // ignore JSON parse error and fallback to XML
-    }
-
-    try {
-      const xml = await parseStringPromise(raw, {
-        explicitArray: false,
-        ignoreAttrs: true,
-        trim: true,
-      });
-      return xml;
-    } catch (err) {
-      return null;
-    }
-  }
-
+function resolveServiceId(serviceCode) {
+  if (serviceCode === "04014")
+    return process.env.MELHOR_ENVIO_SERVICE_SEDEX || null;
+  if (serviceCode === "04510")
+    return process.env.MELHOR_ENVIO_SERVICE_PAC || null;
   return null;
 }
 
-function normalizeCorreiosService(rawService = {}) {
-  const normalized = {};
-  Object.keys(rawService || {}).forEach((key) => {
-    normalized[key.toLowerCase()] = rawService[key];
-  });
-  return normalized;
-}
+async function calculateMelhorEnvioShipping({ destinationCep, items, metrics }) {
+  const config = buildMelhorEnvioConfig();
+  const sender = config.sender;
+  const servicesToRequest = CORREIOS_SERVICES.map((s) => ({
+    ...s,
+    melhorEnvioId: resolveServiceId(s.code),
+  })).filter((s) => s.melhorEnvioId);
 
-function extractCorreiosServices(data) {
-  if (!data || typeof data !== "object") return [];
+  if (!servicesToRequest.length) throw new Error("Serviços não configurados no Melhor Envio");
 
-  const servicos =
-    data.Servicos ||
-    data.servicos ||
-    data.CResultado ||
-    data.cResultado ||
-    data.cservico ||
-    null;
+  const shipments = servicesToRequest.map((s) => ({
+    service: s.melhorEnvioId,
+    from: { postal_code: sender.postal_code },
+    to: { postal_code: destinationCep },
+    volumes: [
+      {
+        height: PACKAGE_DIMENSIONS.altura,
+        width: PACKAGE_DIMENSIONS.largura,
+        length: PACKAGE_DIMENSIONS.comprimento,
+        weight: metrics.billedWeightKg,
+      },
+    ],
+    products: items.map((i) => ({
+      name: i.name || "Produto",
+      quantity: i.qty || 1,
+      unitary_value: i.price || 0,
+    })),
+    options: { insurance_value: metrics.subtotal, receipt: false, own_hand: false },
+  }));
 
-  if (!servicos) return [];
-
-  const list = servicos.cServico || servicos.CServico || servicos.servico || servicos.Servico;
-  if (!list) return [];
-  if (Array.isArray(list)) return list;
-  return [list];
-}
-
-function buildCorreiosUrl({ serviceCode, destinationCep, weightKg, declaredValue }) {
-  const params = new URLSearchParams({
-    nCdEmpresa: "",
-    sDsSenha: "",
-    nCdServico: serviceCode,
-    sCepOrigem: ORIGIN.cep,
-    sCepDestino: destinationCep,
-    nVlPeso: weightKg.toFixed(2),
-    nCdFormato: PACKAGE_DIMENSIONS.formato,
-    nVlComprimento: PACKAGE_DIMENSIONS.comprimento.toFixed(1),
-    nVlAltura: PACKAGE_DIMENSIONS.altura.toFixed(1),
-    nVlLargura: PACKAGE_DIMENSIONS.largura.toFixed(1),
-    nVlDiametro: PACKAGE_DIMENSIONS.diametro.toFixed(1),
-    sCdMaoPropria: "N",
-    nVlValorDeclarado: formatDeclaredValueBR(declaredValue),
-    sCdAvisoRecebimento: "N",
-    StrRetorno: "json",
+  const response = await melhorEnvioRequest(config, "/me/shipment/calculate", {
+    method: "POST",
+    body: shipments,
   });
 
-  return `https://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx/CalcPrecoPrazo?${params.toString()}`;
+  return {
+    provider: "melhorenvio",
+    services: response.map((r) => ({
+      method: "melhorenvio",
+      name: r.name,
+      serviceCode: r.service_id,
+      cost: parseFloat(r.price),
+      deliveryEstimate: r.delivery_range?.text || "",
+      deliveryDays: r.delivery_range || null,
+      error: r.error || null,
+    })),
+  };
+}
+
+/**
+ * -----------------------------
+ * Correios fallback
+ * -----------------------------
+ */
+function parseCorreiosPrice(value) {
+  if (typeof value !== "string") return NaN;
+  return Number(value.replace(/\./g, "").replace(",", "."));
+}
+
+function parseCorreiosPrazo(value) {
+  const prazo = parseInt(value, 10);
+  return Number.isFinite(prazo) ? prazo : null;
 }
 
 function formatDeliveryEstimate(prazo) {
-  if (!prazo) {
-    return "Prazo informado pelos Correios no ato da postagem";
-  }
-  return `${prazo} dia${prazo > 1 ? "s" : ""} útil${prazo > 1 ? "eis" : ""}`;
+  return prazo ? `${prazo} dias úteis` : "Prazo informado no ato da postagem";
 }
 
-async function requestCorreiosQuoteForService({
-  service,
-  destinationCep,
-  billedWeightKg,
-  declaredValue,
-}) {
-  const url = buildCorreiosUrl({
-    serviceCode: service.code,
-    destinationCep,
-    weightKg: billedWeightKg,
-    declaredValue,
+async function requestCorreiosQuoteForService({ service, destinationCep, billedWeightKg, declaredValue }) {
+  const params = new URLSearchParams({
+    nCdServico: service.code,
+    sCepOrigem: ORIGIN.cep,
+    sCepDestino: destinationCep,
+    nVlPeso: billedWeightKg.toFixed(2),
+    nCdFormato: PACKAGE_DIMENSIONS.formato,
+    nVlComprimento: PACKAGE_DIMENSIONS.comprimento,
+    nVlAltura: PACKAGE_DIMENSIONS.altura,
+    nVlLargura: PACKAGE_DIMENSIONS.largura,
+    nVlDiametro: PACKAGE_DIMENSIONS.diametro,
+    nVlValorDeclarado: formatDeclaredValueBR(declaredValue),
+    StrRetorno: "json",
   });
-
-  const response = await fetchFn(url, { method: "GET", cache: "no-store" });
-  if (!response.ok) {
-    const error = new Error(`Correios HTTP ${response.status}`);
-    error.status = response.status;
-    throw error;
-  }
-
-  const rawText = await response.text();
-  const data = await parseCorreiosResponse(rawText);
-  if (!data) {
-    const error = new Error("Resposta inválida dos Correios");
-    error.response = rawText;
-    throw error;
-  }
-
-  const serviceList = extractCorreiosServices(data).map(normalizeCorreiosService);
-  if (!serviceList.length) {
-    throw new Error("Serviço dos Correios indisponível");
-  }
-
-  const normalizedCode = service.code.toLowerCase();
-  const serviceData =
-    serviceList.find((item) => (item.codigo || item.code || "").toString() === service.code) ||
-    serviceList.find((item) => (item.codigo || item.code || "").toString().toLowerCase() === normalizedCode) ||
-    serviceList[0];
-
-  if (!serviceData) {
-    throw new Error("Serviço dos Correios indisponível");
-  }
-
-  const errorCode = (serviceData.erro || serviceData.error || "0").toString().trim();
-  if (errorCode && errorCode !== "0") {
-    const message =
-      serviceData.msgerro ||
-      serviceData.mensagem ||
-      serviceData.msgErro ||
-      serviceData.msgerro ||
-      "Não foi possível obter o frete";
-    const err = new Error(message);
-    err.code = errorCode;
-    throw err;
-  }
-
-  const cost = parseCorreiosPrice(serviceData.valor || serviceData.custo || serviceData.valorcomdesconto);
-  if (!Number.isFinite(cost) || cost <= 0) {
-    throw new Error("Valor de frete não informado pelos Correios");
-  }
-
-  const prazo =
-    parseCorreiosPrazo(serviceData.prazoentrega || serviceData.prazo || serviceData.prazoEntrega) ||
-    null;
-
+  const url = `https://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx/CalcPrecoPrazo?${params}`;
+  const res = await fetchFn(url);
+  const data = await res.json();
+  const servico = data.Servicos.cServico[0];
+  if (servico.Erro && servico.Erro !== "0") throw new Error(servico.MsgErro);
   return {
     method: "correios",
-    name: serviceData.nome?.trim() || service.name,
+    name: service.name,
     serviceCode: service.code,
-    cost: Math.round(cost * 100) / 100,
+    cost: parseCorreiosPrice(servico.Valor),
     currency: "BRL",
-    deliveryEstimate: formatDeliveryEstimate(prazo),
-    deliveryDays: prazo ? { min: prazo, max: prazo } : null,
-    calculatedAt: new Date().toISOString(),
+    deliveryEstimate: formatDeliveryEstimate(parseCorreiosPrazo(servico.PrazoEntrega)),
+    deliveryDays: { min: parseInt(servico.PrazoEntrega, 10), max: parseInt(servico.PrazoEntrega, 10) },
     error: null,
   };
 }
 
-async function calculateCorreiosShipping({ cep, items, subtotal }) {
-  const destinationCep = sanitizeCep(cep);
-  if (!destinationCep || destinationCep.length !== 8) {
-    const error = new Error("CEP inválido para cálculo de frete");
-    error.status = 400;
-    throw error;
-  }
-
-  const normalizedItems = Array.isArray(items) ? items.filter(Boolean) : [];
-  if (!normalizedItems.length) {
-    const error = new Error("Nenhum item informado para cálculo de frete");
-    error.status = 400;
-    throw error;
-  }
-
-  const metrics = computeCartMetrics(normalizedItems, Number(subtotal));
-  const declaredValue = metrics.subtotal;
-
+async function calculateCorreiosShipping({ cep, items, subtotal, metrics }) {
   const services = [];
-  const errors = [];
-
   for (const service of CORREIOS_SERVICES) {
     try {
       const quote = await requestCorreiosQuoteForService({
         service,
-        destinationCep,
+        destinationCep: cep,
         billedWeightKg: metrics.billedWeightKg,
-        declaredValue,
+        declaredValue: subtotal,
       });
       services.push(quote);
     } catch (err) {
-      services.push({
-        method: "correios",
-        name: service.name,
-        serviceCode: service.code,
-        cost: null,
-        currency: "BRL",
-        deliveryEstimate: "",
-        deliveryDays: null,
-        calculatedAt: new Date().toISOString(),
-        error: err?.message || "Serviço indisponível",
-      });
-      errors.push({
-        service: service.name,
-        serviceCode: service.code,
-        message: err?.message || "Serviço indisponível",
-        code: err?.code || null,
-      });
+      services.push({ ...service, error: err.message });
     }
   }
-
-  const validServices = services.filter((service) => Number.isFinite(service.cost) && !service.error);
-  validServices.sort((a, b) => a.cost - b.cost);
-
-  const preferredServiceCode =
-    validServices.find((service) => service.serviceCode === CORREIOS_SERVICES[0].code)?.serviceCode ||
-    validServices[0]?.serviceCode ||
-    CORREIOS_SERVICES.find((service) => service.key === DEFAULT_SERVICE_KEY)?.code ||
-    null;
-
-  return {
-    origin: { ...ORIGIN },
-    originLabel: ORIGIN_LABEL,
-    destinationCep,
-    itemCount: metrics.quantity,
-    package: {
-      weightKg: metrics.physicalWeightKg,
-      billedWeightKg: metrics.billedWeightKg,
-      declaredValue,
-      dimensions: { ...PACKAGE_DIMENSIONS },
-    },
-    services,
-    errors,
-    calculatedAt: new Date().toISOString(),
-    preferredServiceCode,
-  };
+  return { provider: "correios", services };
 }
 
+/**
+ * -----------------------------
+ * Handler principal
+ * -----------------------------
+ */
 module.exports = async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
-    return res.status(405).json({ error: "Método não permitido" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ error: "Método não permitido" });
 
   const payload = parseBody(req.body);
-  const cep = sanitizeCep(payload?.cep || payload?.zip || "");
-  const items = Array.isArray(payload?.items) ? payload.items.filter(Boolean) : [];
+  const cep = sanitizeCep(payload?.cep || "");
+  const items = Array.isArray(payload?.items) ? payload.items : [];
   const subtotal = Number(payload?.subtotal);
+  const metrics = computeCartMetrics(items, subtotal);
 
   try {
-    const result = await calculateCorreiosShipping({
-      cep,
-      items,
-      subtotal: Number.isFinite(subtotal) ? subtotal : undefined,
-    });
-
+    let result;
+    try {
+      result = await calculateMelhorEnvioShipping({ destinationCep: cep, items, metrics });
+    } catch (err) {
+      console.error("Erro Melhor Envio:", err.message);
+      result = await calculateCorreiosShipping({ cep, items, subtotal, metrics });
+    }
     return res.status(200).json(result);
   } catch (err) {
-    const status = err?.status && Number.isInteger(err.status) ? err.status : 502;
-    console.error("Erro ao consultar frete dos Correios:", err);
-    const message =
-      err?.message || "Não foi possível calcular o frete com os Correios neste momento.";
-    return res.status(status).json({ error: message });
+    return res.status(500).json({ error: err.message });
   }
 };
