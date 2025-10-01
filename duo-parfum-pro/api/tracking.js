@@ -2,9 +2,7 @@ const https = require("https");
 const { getAccessToken } = require("./melhorenvio-auth");
 const { getFirebaseAdmin } = require("./_firebase-admin");
 
-/**
- * Utils
- */
+// ==================== Utils ====================
 function sanitizeString(value, fallback = "") {
   if (value === null || value === undefined) return fallback;
   return String(value).trim();
@@ -29,9 +27,7 @@ function sanitizeOrderStatus(status = "") {
   return "pending";
 }
 
-/**
- * Correios tracking
- */
+// ==================== Correios tracking ====================
 function fetchCorreiosTracking(code) {
   const url = `https://proxyapp.correios.com.br/v1/sro-rastro/${encodeURIComponent(code)}`;
   return new Promise((resolve, reject) => {
@@ -109,9 +105,7 @@ function normalizeCorreiosData(code, payload = {}) {
   return { code: sanitizeCode(objeto.codObjeto || code), events, raw: objeto, provider: "correios" };
 }
 
-/**
- * Melhor Envio tracking
- */
+// ==================== Melhor Envio tracking ====================
 function resolveApiBase() {
   const explicit = sanitizeString(process.env.MELHOR_ENVIO_API_URL);
   if (explicit) return explicit;
@@ -145,9 +139,7 @@ function normalizeMelhorEnvioData(code, payload = {}) {
   return { code: sanitizeCode(code), events, raw: payload, provider: "melhorenvio" };
 }
 
-/**
- * Firestore sync
- */
+// ==================== Firestore sync ====================
 async function updateTrackingInFirestore({ code, normalized, orderId }) {
   let admin;
   try {
@@ -191,9 +183,7 @@ async function updateTrackingInFirestore({ code, normalized, orderId }) {
   await docRef.set(updatePayload, { merge: true });
 }
 
-/**
- * Handler
- */
+// ==================== Handler ====================
 module.exports = async function handler(req, res) {
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
@@ -215,6 +205,7 @@ module.exports = async function handler(req, res) {
       result = normalizeCorreiosData(code, raw);
     }
     updateTrackingInFirestore({ code, normalized: result, orderId }).catch(console.error);
+
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
     return res.status(200).json(result);
   } catch (err) {

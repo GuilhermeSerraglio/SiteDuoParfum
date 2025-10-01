@@ -30,7 +30,7 @@ function parseBody(body) {
   if (typeof body === "string") {
     try {
       return JSON.parse(body);
-    } catch {
+    } catch (err) {
       return {};
     }
   }
@@ -65,9 +65,9 @@ function resolveApiBase() {
 function loadSenderConfig() {
   const rawJson = sanitizeString(
     process.env.MELHOR_ENVIO_SENDER_JSON ||
-      process.env.MELHOR_ENVIO_FROM_JSON ||
-      process.env.MELHOR_ENVIO_SENDER ||
-      ""
+    process.env.MELHOR_ENVIO_FROM_JSON ||
+    process.env.MELHOR_ENVIO_SENDER ||
+    ""
   );
   if (rawJson) {
     try {
@@ -131,7 +131,6 @@ async function melhorEnvioRequest(config, path, { method = "GET", body } = {}) {
 
   const response = await fetchFn(url, { method, headers, body: payload });
   const text = await response.text();
-
   let data = null;
   if (text) {
     try {
@@ -218,7 +217,7 @@ function sanitizeOrderStatus(status = "") {
   return "pending";
 }
 
-async function createLabelForOrder({ orderId, serviceCode, force = false, auto = false }) {
+async function createLabelForOrder({ orderId, serviceCode, force = false }) {
   if (!orderId) {
     const error = new Error("Pedido não informado para geração da etiqueta");
     error.status = 400;

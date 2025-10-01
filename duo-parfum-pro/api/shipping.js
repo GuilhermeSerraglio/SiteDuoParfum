@@ -38,7 +38,7 @@ function getFetch() {
 }
 const fetchFn = getFetch();
 
-// Utilidades
+// ---------------- Utils ----------------
 function sanitizeString(value, fallback = "") {
   if (value === null || value === undefined) return fallback;
   return String(value).trim();
@@ -89,7 +89,7 @@ function formatDeclaredValueBR(value) {
   return safe.toFixed(2).replace(".", ",");
 }
 
-// ==================== MELHOR ENVIO ====================
+// ---------------- Melhor Envio ----------------
 function resolveApiBase() {
   const env = sanitizeString(process.env.MELHOR_ENVIO_ENV || "sandbox").toLowerCase();
   return env === "production"
@@ -154,7 +154,7 @@ async function calculateMelhorEnvioShipping({ destinationCep, items, metrics }) 
   });
 }
 
-// ==================== CORREIOS ====================
+// ---------------- Correios ----------------
 function buildCorreiosUrl({ serviceCode, destinationCep, weightKg, declaredValue }) {
   const params = new URLSearchParams({
     nCdEmpresa: "",
@@ -194,7 +194,7 @@ async function requestCorreiosQuote(service, destinationCep, billedWeightKg, dec
   };
 }
 
-// ==================== HANDLER ====================
+// ---------------- Handler ----------------
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
