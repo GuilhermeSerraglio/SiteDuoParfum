@@ -17,7 +17,18 @@ const ORDER_STATUS = {
   pending: { key: "pending", label: "Pendente", className: "is-pending", description: "Aguardando confirmação de pagamento" },
   paid: { key: "paid", label: "Pago", className: "is-paid", description: "Pagamento confirmado" },
   sent: { key: "sent", label: "Enviado", className: "is-sent", description: "Pedido enviado para entrega" },
+  delivered: { key: "delivered", label: "Entregue", className: "is-delivered", description: "Pedido entregue ao destinatário" },
   canceled: { key: "canceled", label: "Cancelado", className: "is-canceled", description: "Pagamento cancelado ou não aprovado" }
+};
+
+const SHIPPING_STATUS_INFO = {
+  awaiting_label: { key: "awaiting_label", label: "Aguardando etiqueta", description: "Etiqueta será gerada após aprovação do pagamento." },
+  label_generated: { key: "label_generated", label: "Etiqueta gerada", description: "Etiqueta emitida — aguardando postagem." },
+  in_transit: { key: "in_transit", label: "Em trânsito", description: "Objeto postado e em deslocamento pelos Correios." },
+  out_for_delivery: { key: "out_for_delivery", label: "Saiu para entrega", description: "Objeto saiu para entrega ao destinatário." },
+  delivered: { key: "delivered", label: "Entregue", description: "Objeto entregue ao destinatário." },
+  awaiting_pickup: { key: "awaiting_pickup", label: "Aguardando retirada", description: "Objeto disponível para retirada na agência dos Correios." },
+  pickup: { key: "pickup", label: "Retirada no estúdio", description: "Retire seu pedido conosco conforme combinado." }
 };
 
 const SHIPPING_ORIGIN = {
@@ -127,20 +138,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  /* ==== State ==== */
-  const state = window.__STATE = {
-    products: [],
-    cart: loadCart(),
-    selected: null,
-    processingCheckout: false,
-    orders: [],
-    orderTracking: {},
-    ordersLoading: false,
-    ordersError: "",
-    checkoutOrderId: "",
-    checkoutShipping: {
+  function createDefaultCheckoutShipping(){
+    return {
       method: "correios",
       service: "Correios",
+      serviceCode: "",
+      selectedServiceCode: "",
+      preferredServiceCode: "",
+      services: [],
+      errors: [],
       cost: 0,
       calculated: false,
       deliveryEstimate: "",
@@ -152,8 +158,25 @@ document.addEventListener("DOMContentLoaded", async () => {
       calculatedAt: null,
       deliveryDays: null,
       origin: { ...SHIPPING_ORIGIN },
-      originLabel: SHIPPING_ORIGIN_LABEL
-    }
+      originLabel: SHIPPING_ORIGIN_LABEL,
+      package: null,
+      itemCount: 0,
+      trackingStatus: "awaiting_label"
+    };
+  }
+
+  /* ==== State ==== */
+  const state = window.__STATE = {
+    products: [],
+    cart: loadCart(),
+    selected: null,
+    processingCheckout: false,
+    orders: [],
+    orderTracking: {},
+    ordersLoading: false,
+    ordersError: "",
+    checkoutOrderId: "",
+    checkoutShipping: createDefaultCheckoutShipping()
   };
 
   shippingOptionEls = Array.from(document.querySelectorAll("[data-shipping-option]"));
@@ -392,6 +415,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         alert("Calcule o frete dos Correios para o CEP informado antes de continuar.");
         return;
       }
+      if(!shippingState.selectedServiceCode){
+        alert("Selecione uma opção de entrega dos Correios antes de finalizar o pedido.");
+        return;
+      }
     }
 
     setCheckoutProcessing(true);
@@ -399,20 +426,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const subtotal=getCheckoutSubtotal();
     const shippingState=state.checkoutShipping||{};
-    const shippingCost=shippingMethod==="correios"&&shippingState.calculated?Math.max(0,Number(shippingState.cost)||0):0;
+    const correiosServices=Array.isArray(shippingState.services)?shippingState.services:[];
+    const selectedService=shippingMethod==="correios"
+      ? correiosServices.find(service=>service.serviceCode===shippingState.selectedServiceCode)
+      : null;
+    const shippingCost=shippingMethod==="correios"&&shippingState.calculated
+      ? Math.max(0,Number((selectedService&&selectedService.cost!=null?selectedService.cost:shippingState.cost))||0)
+      :0;
     const total=subtotal+shippingCost;
     const originLabel=shippingMethod==="pickup"?"":(shippingState.originLabel||SHIPPING_ORIGIN_LABEL);
 
     const shippingDetails={
       method:shippingMethod,
       methodLabel:shippingMethod==="pickup"?"Retirada no local":"Entrega pelos Correios",
-      service:shippingMethod==="pickup"?"Retirada":(shippingState.service||"Correios"),
+      service:shippingMethod==="pickup"?"Retirada":(selectedService?.name||shippingState.service||"Correios"),
       cost:shippingCost,
       currency:shippingState.currency||"BRL",
       deliveryEstimate:shippingMethod==="pickup"
         ?"Disponível para retirada após confirmação do pagamento"
-        :(shippingState.deliveryEstimate||""),
-      deliveryDays:shippingMethod==="pickup"?null:(shippingState.deliveryDays||null),
+        :((selectedService?.deliveryEstimate)||shippingState.deliveryEstimate||""),
+      deliveryDays:shippingMethod==="pickup"?null:(selectedService?.deliveryDays||shippingState.deliveryDays||null),
       calculatedAt:shippingMethod==="pickup"
         ?new Date()
         :(shippingState.calculatedAt instanceof Date?shippingState.calculatedAt:new Date()),
@@ -423,6 +456,82 @@ document.addEventListener("DOMContentLoaded", async () => {
         ?"Retire no estúdio Duo Parfum mediante agendamento após confirmação."
         :""
     };
+
+    if(shippingMethod==="correios"){
+      const servicesSnapshot=correiosServices.map(service=>({
+        method:service?.method||"correios",
+        name:service?.name||service?.service||"Correios",
+        serviceCode:String(service?.serviceCode||service?.code||"").trim(),
+        cost:Number.isFinite(Number(service?.cost))?Number(service.cost):null,
+        currency:service?.currency||"BRL",
+        deliveryEstimate:service?.deliveryEstimate||"",
+        deliveryDays:service?.deliveryDays||null,
+        calculatedAt:service?.calculatedAt||(
+          shippingDetails.calculatedAt instanceof Date
+            ? shippingDetails.calculatedAt.toISOString()
+            : new Date().toISOString()
+        ),
+        error:service?.error||null
+      }));
+      const errorsSnapshot=Array.isArray(shippingState.errors)
+        ? shippingState.errors.map(err=>({
+            service:err?.service||"",
+            serviceCode:err?.serviceCode||"",
+            message:err?.message||"",
+            code:err?.code||null
+          }))
+        : [];
+      const pkg=shippingState.package||null;
+      shippingDetails.serviceCode=shippingState.serviceCode||selectedService?.serviceCode||"";
+      shippingDetails.selectedServiceCode=shippingState.selectedServiceCode||selectedService?.serviceCode||"";
+      shippingDetails.preferredServiceCode=shippingState.preferredServiceCode||"";
+      shippingDetails.services=servicesSnapshot;
+      shippingDetails.errors=errorsSnapshot;
+      shippingDetails.package=pkg
+        ? {
+            weightKg:Number(pkg.weightKg)||0,
+            billedWeightKg:Number(pkg.billedWeightKg)||0,
+            declaredValue:Number(pkg.declaredValue)||0,
+            dimensions:{
+              formato:pkg.dimensions?.formato||"1",
+              comprimento:Number(pkg.dimensions?.comprimento)||16,
+              altura:Number(pkg.dimensions?.altura)||2,
+              largura:Number(pkg.dimensions?.largura)||11,
+              diametro:Number(pkg.dimensions?.diametro)||0
+            }
+          }
+        : null;
+      shippingDetails.itemCount=Number(shippingState.itemCount)||0;
+      shippingDetails.trackingStatus=shippingState.trackingStatus||"awaiting_label";
+      shippingDetails.quote={
+        calculatedAt:shippingDetails.calculatedAt instanceof Date
+          ? shippingDetails.calculatedAt.toISOString()
+          : shippingDetails.calculatedAt,
+        destinationCep:shippingDetails.cep,
+        originCep:shippingDetails.origin?.cep||SHIPPING_ORIGIN.cep,
+        services:servicesSnapshot,
+        errors:errorsSnapshot
+      };
+    }else{
+      shippingDetails.serviceCode="";
+      shippingDetails.selectedServiceCode="";
+      shippingDetails.preferredServiceCode="";
+      shippingDetails.services=[];
+      shippingDetails.errors=[];
+      shippingDetails.package=null;
+      shippingDetails.itemCount=Number(shippingState.itemCount)||0;
+      shippingDetails.trackingStatus="pickup";
+      shippingDetails.quote={
+        calculatedAt:shippingDetails.calculatedAt instanceof Date
+          ? shippingDetails.calculatedAt.toISOString()
+          : shippingDetails.calculatedAt,
+        destinationCep:"",
+        originCep:SHIPPING_ORIGIN.cep,
+        services:[],
+        errors:[]
+      };
+    }
+    shippingDetails.status=shippingDetails.trackingStatus;
 
     const order={
       userId: auth.currentUser?.uid || null,
@@ -617,59 +726,75 @@ document.addEventListener("DOMContentLoaded", async () => {
       els.ckShippingSummary.textContent="";
       els.ckShippingSummary.classList.remove("error-text");
     }
-    state.checkoutShipping={
-      method:"correios",
-      service:"Correios",
-      cost:0,
-      calculated:false,
-      deliveryEstimate:"",
-      currency:"BRL",
-      summary:"",
-      lastCep:"",
-      cartSignature:computeCartSignature(),
-      needsRecalculation:false,
-      calculatedAt:null,
-      deliveryDays:null,
-      origin:{...SHIPPING_ORIGIN},
-      originLabel:SHIPPING_ORIGIN_LABEL
-    };
+    const resetShipping=createDefaultCheckoutShipping();
+    resetShipping.cartSignature=computeCartSignature();
+    state.checkoutShipping=resetShipping;
     setCheckoutShippingMethod("correios",{updateRadio:true,forceReset:true});
   }
 
   function setCheckoutShippingMethod(method,options={}){
     const {updateRadio=false,forceReset=false}=options;
     const normalized=sanitizeShippingMethod(method);
-    const prev=state.checkoutShipping||{};
+    const prev=state.checkoutShipping||createDefaultCheckoutShipping();
     const next={
       ...prev,
       method:normalized,
-      service:normalized==="pickup"?"Retirada":(prev.service||"Correios"),
-      currency:prev.currency||"BRL",
-      cartSignature:computeCartSignature(),
-      origin:normalized==="correios"?(prev.origin||{...SHIPPING_ORIGIN}):null,
-      originLabel:normalized==="correios"?(prev.originLabel||SHIPPING_ORIGIN_LABEL):""
+      cartSignature:computeCartSignature()
     };
 
     if(normalized==="pickup"){
-      next.calculated=true;
-      next.needsRecalculation=false;
-      next.cost=0;
-      next.deliveryEstimate="";
-      next.deliveryDays=null;
-      next.lastCep="";
-      next.calculatedAt=new Date();
-      next.origin=null;
-      next.originLabel="";
-    }else if(forceReset||prev.method!==normalized){
-      next.calculated=false;
-      next.needsRecalculation=false;
-      next.cost=0;
-      next.deliveryEstimate="";
-      next.deliveryDays=null;
-      next.lastCep="";
-      next.calculatedAt=null;
-      next.origin={...SHIPPING_ORIGIN};
-      next.originLabel=SHIPPING_ORIGIN_LABEL;
+      Object.assign(next,{
+        service:"Retirada",
+        serviceCode:"",
+        selectedServiceCode:"",
+        preferredServiceCode:"",
+        services:[],
+        errors:[],
+        currency:"BRL",
+        cost:0,
+        calculated:true,
+        needsRecalculation:false,
+        deliveryEstimate:"Disponível para retirada após confirmação do pagamento",
+        deliveryDays:null,
+        lastCep:"",
+        calculatedAt:new Date(),
+        origin:null,
+        originLabel:"",
+        package:null,
+        itemCount:0,
+        trackingStatus:"awaiting_label"
+      });
+    }else{
+      Object.assign(next,{
+        service:prev.service||"Correios",
+        serviceCode:prev.serviceCode||prev.selectedServiceCode||prev.preferredServiceCode||"",
+        currency:prev.currency||"BRL",
+        origin:prev.origin||{...SHIPPING_ORIGIN},
+        originLabel:prev.originLabel||SHIPPING_ORIGIN_LABEL,
+        trackingStatus:prev.trackingStatus||"awaiting_label"
+      });
+
+      if(forceReset||prev.method!==normalized){
+        Object.assign(next,{
+          service:"Correios",
+          serviceCode:"",
+          selectedServiceCode:"",
+          preferredServiceCode:"",
+          services:[],
+          errors:[],
+          cost:0,
+          calculated:false,
+          needsRecalculation:false,
+          deliveryEstimate:"",
+          deliveryDays:null,
+          lastCep:"",
+          calculatedAt:null,
+          origin:{...SHIPPING_ORIGIN},
+          originLabel:SHIPPING_ORIGIN_LABEL,
+          package:null,
+          itemCount:0
+        });
+      }
     }
 
     state.checkoutShipping=next;
@@ -722,27 +847,56 @@ document.addEventListener("DOMContentLoaded", async () => {
         const message=data?.error||`HTTP ${resp.status}`;
         throw new Error(message);
       }
-      const costValue=Number(data?.cost);
-      if(!Number.isFinite(costValue)||costValue<0){
-        throw new Error(data?.error||"Frete indisponível no momento.");
+
+      const rawServices=Array.isArray(data?.services)?data.services:[];
+      const services=rawServices.map(service=>({
+        method:service?.method||"correios",
+        name:service?.name||service?.service||"Correios",
+        serviceCode:String(service?.serviceCode||service?.code||"").trim(),
+        cost:Number(service?.cost),
+        currency:service?.currency||"BRL",
+        deliveryEstimate:service?.deliveryEstimate||"",
+        deliveryDays:service?.deliveryDays||null,
+        calculatedAt:service?.calculatedAt||data?.calculatedAt||new Date().toISOString(),
+        error:service?.error||null
+      }));
+      const validServices=services.filter(item=>Number.isFinite(item.cost)&&item.cost>=0&&!item.error);
+      if(!validServices.length){
+        const firstError=data?.errors?.[0]?.message||data?.error||services.find(item=>item.error)?.error;
+        throw new Error(firstError||"Frete indisponível no momento.");
       }
 
-      state.checkoutShipping={
+      const preferredCode=String(data?.preferredServiceCode||"").trim();
+      const previousSelected=String(state.checkoutShipping?.selectedServiceCode||"").trim();
+      const selectedService=validServices.find(item=>item.serviceCode===previousSelected)
+        || validServices.find(item=>item.serviceCode===preferredCode)
+        || validServices[0];
+
+      const nextShipping={
         ...state.checkoutShipping,
         method:"correios",
-        service:data?.service||state.checkoutShipping?.service||"Correios",
-        cost:costValue,
-        currency:data?.currency||"BRL",
+        service:selectedService?.name||"Correios",
+        serviceCode:selectedService?.serviceCode||"",
+        selectedServiceCode:selectedService?.serviceCode||"",
+        preferredServiceCode:preferredCode||selectedService?.serviceCode||"",
+        services,
+        errors:Array.isArray(data?.errors)?data.errors:[],
+        cost:Number(selectedService?.cost)||0,
+        currency:selectedService?.currency||"BRL",
         calculated:true,
-        deliveryEstimate:data?.deliveryEstimate||"",
-        deliveryDays:data?.deliveryDays||null,
+        deliveryEstimate:selectedService?.deliveryEstimate||"",
+        deliveryDays:selectedService?.deliveryDays||null,
         calculatedAt:data?.calculatedAt?new Date(data.calculatedAt):new Date(),
         lastCep:cep,
         needsRecalculation:false,
         cartSignature:computeCartSignature(),
         origin:data?.origin?{...data.origin}:{...SHIPPING_ORIGIN},
-        originLabel:data?.originLabel||SHIPPING_ORIGIN_LABEL
+        originLabel:data?.originLabel||SHIPPING_ORIGIN_LABEL,
+        package:data?.package||state.checkoutShipping?.package||null,
+        itemCount:Number(data?.itemCount)||state.checkoutShipping?.itemCount||0
       };
+
+      state.checkoutShipping=nextShipping;
 
       updateCheckoutShippingUI();
     }catch(err){
@@ -759,6 +913,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         cost:0,
         deliveryEstimate:"",
         deliveryDays:null,
+        services:[],
+        errors:[],
+        selectedServiceCode:"",
+        serviceCode:"",
+        package:null,
+        itemCount:0,
         origin:{...SHIPPING_ORIGIN},
         originLabel:SHIPPING_ORIGIN_LABEL
       };
@@ -783,25 +943,120 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
     }
     if(els.ckShippingCorreiosArea) toggle(els.ckShippingCorreiosArea, method!=="correios");
-    if(els.ckShippingSummary){
-      if(method!=="correios"){
-        els.ckShippingSummary.textContent="";
-        els.ckShippingSummary.classList.remove("error-text");
-      }else if(!shippingState.calculated&&shippingState.needsRecalculation){
-        els.ckShippingSummary.textContent="Carrinho atualizado — calcule novamente o frete para ver o valor final.";
-        els.ckShippingSummary.classList.remove("error-text");
-      }else if(shippingState.calculated){
-        const costText=formatBRL(Math.max(0,Number(shippingState.cost)||0));
-        const parts=[`${shippingState.service||"Correios"}: ${costText}`];
-        if(shippingState.deliveryEstimate){ parts.push(shippingState.deliveryEstimate); }
-        if(shippingState.originLabel){ parts.push(`Postagem: ${shippingState.originLabel}`); }
-        els.ckShippingSummary.textContent=parts.join(" • ");
-        els.ckShippingSummary.classList.remove("error-text");
+    if(!els.ckShippingSummary) return;
+    if(method!=="correios"){
+      els.ckShippingSummary.innerHTML="";
+      els.ckShippingSummary.classList.remove("error-text");
+      return;
+    }
+    renderShippingServiceOptions();
+  }
+
+  function renderShippingServiceOptions(){
+    if(!els.ckShippingSummary) return;
+    let shippingState=state.checkoutShipping||{};
+    const summaryEl=els.ckShippingSummary;
+    summaryEl.classList.remove("error-text");
+
+    const method=sanitizeShippingMethod(shippingState.method);
+    if(method!=="correios"){
+      summaryEl.innerHTML="";
+      return;
+    }
+
+    if(!shippingState.calculated){
+      if(shippingState.needsRecalculation){
+        summaryEl.textContent="Carrinho atualizado — calcule novamente o frete para ver o valor final.";
       }else{
-        els.ckShippingSummary.textContent="Informe o CEP e clique em \"Calcular frete\".";
-        els.ckShippingSummary.classList.remove("error-text");
+        summaryEl.textContent="Informe o CEP e clique em \"Calcular frete\".";
+      }
+      return;
+    }
+
+    const services=Array.isArray(shippingState.services)?shippingState.services:[];
+    if(!services.length){
+      summaryEl.textContent="Nenhuma opção de frete disponível no momento.";
+      summaryEl.classList.add("error-text");
+      return;
+    }
+
+    const validServices=services.filter(service=>Number.isFinite(service.cost)&&service.cost>=0&&!service.error);
+    let selectedCode=String(shippingState.selectedServiceCode||"").trim();
+    if(validServices.length){
+      const hasSelected=validServices.some(service=>service.serviceCode===selectedCode);
+      if(!hasSelected){
+        const fallback=validServices[0];
+        selectedCode=fallback.serviceCode||"";
+        state.checkoutShipping={
+          ...state.checkoutShipping,
+          service:fallback.name||"Correios",
+          serviceCode:fallback.serviceCode||"",
+          selectedServiceCode:fallback.serviceCode||"",
+          cost:Number(fallback.cost)||0,
+          currency:fallback.currency||"BRL",
+          deliveryEstimate:fallback.deliveryEstimate||"",
+          deliveryDays:fallback.deliveryDays||null
+        };
+        shippingState=state.checkoutShipping;
       }
     }
+
+    const optionsHtml=services.map(service=>{
+      const code=String(service.serviceCode||"").trim();
+      const isError=!!service.error||!Number.isFinite(service.cost)||service.cost<0;
+      const isSelected=!isError&&code===String(shippingState.selectedServiceCode||"").trim();
+      const priceLabel=Number.isFinite(service.cost)&&service.cost>=0?formatBRL(Math.max(0,service.cost)):"Indisponível";
+      const optionClasses=["shipping-service-option"];
+      if(isSelected) optionClasses.push("is-selected");
+      if(isError) optionClasses.push("is-disabled");
+      const detailsParts=[];
+      if(service.deliveryEstimate) detailsParts.push(escapeHtml(service.deliveryEstimate));
+      if(service.error) detailsParts.push(`<span class="shipping-service-option__error">${escapeHtml(service.error)}</span>`);
+      const detailsHtml=detailsParts.length?`<span class="shipping-service-option__details">${detailsParts.join(" • ")}</span>`:"";
+      const checkedAttr=isSelected?" checked":"";
+      const disabledAttr=isError?" disabled":"";
+      return `<label class="${optionClasses.join(" ")}"><input type="radio" name="ckCorreiosService" value="${escapeHtml(code)}" data-service-radio${checkedAttr}${disabledAttr}><div class="shipping-service-option__info"><span class="shipping-service-option__title">${escapeHtml(service.name||"Correios")}</span><span class="shipping-service-option__price">${escapeHtml(priceLabel)}</span>${detailsHtml}</div></label>`;
+    }).join("");
+
+    const originLine=shippingState.originLabel?`<p class="shipping-service-origin muted">Postagem: ${escapeHtml(shippingState.originLabel)}</p>`:"";
+    const warning=!validServices.length?`<p class="shipping-service-warning error-text">Nenhuma opção de frete disponível no momento.</p>`:"";
+
+    summaryEl.innerHTML=`<div class="shipping-service-list" data-shipping-service-list>${optionsHtml}</div>${originLine}${warning}`;
+
+    const radios=Array.from(summaryEl.querySelectorAll("[data-service-radio]"));
+    radios.forEach(input=>{
+      input.addEventListener("change",ev=>{
+        selectCheckoutCorreiosService(ev.target.value);
+      });
+    });
+
+    if(!validServices.length){
+      summaryEl.classList.add("error-text");
+    }
+
+    renderCheckoutTotals();
+  }
+
+  function selectCheckoutCorreiosService(serviceCode){
+    const shippingState=state.checkoutShipping||{};
+    const services=Array.isArray(shippingState.services)?shippingState.services:[];
+    const code=String(serviceCode||"").trim();
+    const service=services.find(item=>item.serviceCode===code&&!item.error&&Number.isFinite(item.cost));
+    if(!service) return;
+
+    state.checkoutShipping={
+      ...shippingState,
+      service:service.name||"Correios",
+      serviceCode:service.serviceCode||"",
+      selectedServiceCode:service.serviceCode||"",
+      cost:Number(service.cost)||0,
+      currency:service.currency||"BRL",
+      deliveryEstimate:service.deliveryEstimate||"",
+      deliveryDays:service.deliveryDays||null
+    };
+
+    renderShippingServiceOptions();
+    renderCheckoutTotals();
   }
 
   function renderCheckoutTotals(){
@@ -841,6 +1096,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         state.checkoutShipping.calculatedAt=null;
         state.checkoutShipping.needsRecalculation=wasCalculated;
         state.checkoutShipping.lastCep=wasCalculated?state.checkoutShipping.lastCep||"":"";
+        state.checkoutShipping.services=[];
+        state.checkoutShipping.errors=[];
+        state.checkoutShipping.selectedServiceCode="";
+        state.checkoutShipping.serviceCode="";
+        state.checkoutShipping.package=null;
+        state.checkoutShipping.itemCount=0;
       }
       updateCheckoutShippingUI();
     }
@@ -1046,6 +1307,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const customer=order.customer||{};
     const shipping=order.shipping||{};
     const shippingMethod=sanitizeShippingMethod(shipping.method);
+    const shippingStatusInfo=getShippingStatusInfo(shipping.trackingStatus||shipping.status);
     const destination=shippingMethod==="pickup"
       ?"Retirada no local"
       :[customer.address,formatCep(shipping.cep||customer.cep)].filter(Boolean).join(" · ");
@@ -1065,6 +1327,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if(shipping.deliveryEstimate){ shippingLabelParts.push(escapeHtml(shipping.deliveryEstimate)); }
       if(shipping.originLabel){ shippingLabelParts.push(`Postagem: ${escapeHtml(shipping.originLabel)}`); }
     }
+    if(shippingStatusInfo){ shippingLabelParts.push(escapeHtml(shippingStatusInfo.label)); }
     const shippingDisplay=shippingLabelParts.join(" • ");
 
     const metaLines=[];
@@ -1079,20 +1342,42 @@ document.addEventListener("DOMContentLoaded", async () => {
       return `<li>${qty}x ${name}${ml}</li>`;
     }).join("");
 
-    const trackingSection=order.trackingCode
-      ? `<div class="order-tracking" data-order-id="${order.id}">
+    const trackingActions=[];
+    if(order.trackingCode){
+      trackingActions.push(`<button class="btn small ghost" data-refresh-tracking="${order.id}">Atualizar rastreio</button>`);
+      trackingActions.push(`<a class="btn small ghost" href="https://rastreamento.correios.com.br/app/index.php?codigo=${encodeURIComponent(order.trackingCode)}" target="_blank" rel="noreferrer">Ver no site dos Correios</a>`);
+    }
+    if(shippingMethod==="correios"&&shipping.labelUrl){
+      trackingActions.push(`<a class="btn small ghost" href="${escapeHtml(shipping.labelUrl)}" target="_blank" rel="noreferrer">Baixar etiqueta</a>`);
+    }
+    const actionsHtml=trackingActions.length?`<div class="order-card__tracking-actions">${trackingActions.join("")}</div>`:"";
+    const statusInfoHtml=shippingStatusInfo
+      ? `<div class="order-tracking__status-info"><strong>${escapeHtml(shippingStatusInfo.label)}</strong><span class="muted">${escapeHtml(shippingStatusInfo.description)}</span></div>`
+      : "";
+
+    let trackingSection;
+    if(order.trackingCode){
+      trackingSection=`<div class="order-tracking" data-order-id="${order.id}">
           <div class="order-tracking__code">Código: <strong>${escapeHtml(order.trackingCode)}</strong></div>
+          ${statusInfoHtml}
           <div class="order-tracking__status" data-tracking-status="${order.id}">
             <span class="muted">Consultando status nos Correios...</span>
           </div>
-          <div class="order-card__tracking-actions">
-            <button class="btn small ghost" data-refresh-tracking="${order.id}">Atualizar rastreio</button>
-            <a class="btn small ghost" href="https://rastreamento.correios.com.br/app/index.php?codigo=${encodeURIComponent(order.trackingCode)}" target="_blank" rel="noreferrer">Ver no site dos Correios</a>
-          </div>
-        </div>`
-      : shippingMethod==="pickup"
-        ? `<p class="muted">Este pedido ficará disponível para retirada no estúdio Duo Parfum após a confirmação do pagamento.</p>`
-        : `<p class="muted">O código de rastreio será informado assim que o pedido for postado nos Correios de ${escapeHtml(shipping.originLabel||SHIPPING_ORIGIN_LABEL)}.</p>`;
+          ${actionsHtml}
+        </div>`;
+    }else if(shippingMethod==="pickup"){
+      const fallbackInfo=statusInfoHtml||`<p class="muted">Este pedido ficará disponível para retirada no estúdio Duo Parfum após a confirmação do pagamento.</p>`;
+      trackingSection=`<div class="order-tracking" data-order-id="${order.id}">
+          ${fallbackInfo}
+          ${actionsHtml}
+        </div>`;
+    }else{
+      const defaultMessage=statusInfoHtml||`<p class="muted">O código de rastreio será informado assim que o pedido for postado nos Correios de ${escapeHtml(shipping.originLabel||SHIPPING_ORIGIN_LABEL)}.</p>`;
+      trackingSection=`<div class="order-tracking" data-order-id="${order.id}">
+          ${defaultMessage}
+          ${actionsHtml}
+        </div>`;
+    }
 
     card.innerHTML=`
       <div class="pad order-card__content">
@@ -1151,7 +1436,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     state.orderTracking[id]={code,status:"loading"};
     updateTrackingUI(id);
-    fetchTracking(code)
+    fetchTracking(code,id)
       .then(data=>{
         state.orderTracking[id]={code,status:"loaded",data,fetchedAt:new Date()};
         updateTrackingUI(id);
@@ -1162,8 +1447,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
   }
 
-  async function fetchTracking(code){
-    const resp=await fetch(`/api/tracking?code=${encodeURIComponent(code)}`);
+  async function fetchTracking(code,orderId){
+    const params=new URLSearchParams({code});
+    if(orderId) params.append("orderId",orderId);
+    const resp=await fetch(`/api/tracking?${params.toString()}`);
     const text=await resp.text();
     let payload={};
     if(text){ try{ payload=JSON.parse(text); }catch{ payload={}; } }
@@ -1183,12 +1470,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     const order=state.orders.find(o=>o.id===orderId);
     const shippingMethod=sanitizeShippingMethod(order?.shipping?.method);
     const originLabel=order?.shipping?.originLabel||SHIPPING_ORIGIN_LABEL;
+    const shippingStatusInfo=getShippingStatusInfo(order?.shipping?.trackingStatus||order?.shipping?.status);
 
     if(!tracking||!tracking.code){
       if(shippingMethod==="pickup"){
-        container.innerHTML=`<span class="muted">Retirada no estúdio Duo Parfum — agende a melhor data com nossa equipe.</span>`;
+        const message=shippingStatusInfo?.description||"Retirada no estúdio Duo Parfum — agende a melhor data com nossa equipe.";
+        container.innerHTML=`<span class="muted">${escapeHtml(message)}</span>`;
       }else{
-        container.innerHTML=`<span class="muted">Aguardando código de rastreio. Postagem será realizada nos Correios de ${escapeHtml(originLabel)}.</span>`;
+        const message=shippingStatusInfo?.description||`Aguardando código de rastreio. Postagem será realizada nos Correios de ${originLabel}.`;
+        container.innerHTML=`<span class="muted">${escapeHtml(message)}</span>`;
       }
       return;
     }
@@ -1297,6 +1587,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       : shippingRaw?.trackingGeneratedAt instanceof Date?shippingRaw.trackingGeneratedAt:null;
     const subtotalValue=Number(data?.subtotal);
     const subtotal=Number.isFinite(subtotalValue)?subtotalValue:items.reduce((sum,item)=>sum+(Number(item.price)||0)*(Number(item.qty)||0),0);
+    const quoteRaw=shippingRaw?.quote;
+    const quote=quoteRaw&&typeof quoteRaw==="object"
+      ? {
+          calculatedAt:typeof quoteRaw.calculatedAt?.toDate==="function"
+            ? quoteRaw.calculatedAt.toDate()
+            : quoteRaw.calculatedAt||null,
+          destinationCep:quoteRaw.destinationCep||shippingRaw?.cep||customer?.cep||"",
+          originCep:quoteRaw.originCep||shippingRaw?.origin?.cep||SHIPPING_ORIGIN.cep,
+          services:Array.isArray(quoteRaw.services)?quoteRaw.services:[],
+          errors:Array.isArray(quoteRaw.errors)?quoteRaw.errors:[]
+        }
+      : null;
 
     return {
       id:doc.id,
@@ -1321,6 +1623,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         method:shippingMethod,
         methodLabel:shippingRaw?.methodLabel||(shippingMethod==="pickup"?"Retirada no local":"Entrega pelos Correios"),
         service:shippingRaw?.service||(shippingMethod==="pickup"?"Retirada":"Correios"),
+        serviceCode:shippingRaw?.serviceCode||shippingRaw?.selectedServiceCode||"",
+        selectedServiceCode:shippingRaw?.selectedServiceCode||shippingRaw?.serviceCode||"",
+        preferredServiceCode:shippingRaw?.preferredServiceCode||"",
         cost:Number(shippingRaw?.cost)||0,
         currency:shippingRaw?.currency||"BRL",
         deliveryEstimate:shippingRaw?.deliveryEstimate||"",
@@ -1330,6 +1635,45 @@ document.addEventListener("DOMContentLoaded", async () => {
         origin:shippingMethod==="pickup"?null:(shippingRaw?.origin||{...SHIPPING_ORIGIN}),
         originLabel:shippingMethod==="pickup"?"":(shippingRaw?.originLabel||SHIPPING_ORIGIN_LABEL),
         instructions:shippingRaw?.instructions||"",
+        services:Array.isArray(shippingRaw?.services)?shippingRaw.services.map(service=>({
+          method:service?.method||"correios",
+          name:service?.name||service?.service||"Correios",
+          serviceCode:String(service?.serviceCode||service?.code||"").trim(),
+          cost:Number.isFinite(Number(service?.cost))?Number(service.cost):null,
+          currency:service?.currency||"BRL",
+          deliveryEstimate:service?.deliveryEstimate||"",
+          deliveryDays:service?.deliveryDays||null,
+          calculatedAt:service?.calculatedAt||null,
+          error:service?.error||null
+        })) : [],
+        errors:Array.isArray(shippingRaw?.errors)?shippingRaw.errors.map(err=>({
+          service:err?.service||"",
+          serviceCode:err?.serviceCode||"",
+          message:err?.message||"",
+          code:err?.code||null
+        })) : [],
+        package:shippingRaw?.package
+          ? {
+              weightKg:Number(shippingRaw.package.weightKg)||0,
+              billedWeightKg:Number(shippingRaw.package.billedWeightKg)||0,
+              declaredValue:Number(shippingRaw.package.declaredValue)||0,
+              dimensions:{
+                formato:shippingRaw.package.dimensions?.formato||"1",
+                comprimento:Number(shippingRaw.package.dimensions?.comprimento)||16,
+                altura:Number(shippingRaw.package.dimensions?.altura)||2,
+                largura:Number(shippingRaw.package.dimensions?.largura)||11,
+                diametro:Number(shippingRaw.package.dimensions?.diametro)||0
+              }
+            }
+          : null,
+        itemCount:Number(shippingRaw?.itemCount)||0,
+        labelUrl:shippingRaw?.labelUrl||"",
+        labelId:shippingRaw?.labelId||"",
+        trackingStatus:shippingRaw?.trackingStatus||shippingRaw?.status||"",
+        status:shippingRaw?.status||shippingRaw?.trackingStatus||"",
+        trackingHistory:Array.isArray(shippingRaw?.trackingHistory)?shippingRaw.trackingHistory:[],
+        lastTrackingEvent:shippingRaw?.lastTrackingEvent||null,
+        quote,
         trackingGeneratedAt,
         trackingGeneratedBy:shippingRaw?.trackingGeneratedBy||""
       },
@@ -1341,6 +1685,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function mapIds(ids){const o={};ids.forEach(id=>o[id]=document.getElementById(id));return o;}
   function toggle(el,h){if(el) el.classList.toggle("hidden",h);}
   function getOrderStatusInfo(status){const key=(status||"pending").toString().toLowerCase();return ORDER_STATUS[key]||ORDER_STATUS.pending;}
+  function getShippingStatusInfo(status){const key=(status||"").toString().toLowerCase();return SHIPPING_STATUS_INFO[key]||null;}
   function loadCart(){try{return JSON.parse(localStorage.getItem("cart")||"[]");}catch{return []}}
   function saveCart(v){localStorage.setItem("cart",JSON.stringify(v));}
   function formatBRL(n){return n?.toLocaleString?.("pt-BR",{style:"currency",currency:"BRL"})??"R$ 0,00";}

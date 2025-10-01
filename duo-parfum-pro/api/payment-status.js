@@ -1,8 +1,7 @@
-const crypto = require("crypto");
-
 const MP_API_BASE = "https://api.mercadopago.com";
 
 const { getFirebaseAdmin } = require("./_firebase-admin");
+const { createLabelForOrder } = require("./create-label");
 
 function parseBody(body) {
   if (!body) return {};
@@ -134,29 +133,6 @@ function sanitizeTrackingCode(code = "") {
   return code.toString().toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
-function generateTrackingCode(orderId = "") {
-  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const seed = crypto
-    .createHash("sha256")
-    .update(`${orderId}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}`)
-    .digest();
-
-  const prefix = [seed[0] % letters.length, seed[1] % letters.length]
-    .map((index) => letters[index])
-    .join("");
-
-  let digits = "";
-  for (let i = 2; i < seed.length && digits.length < 9; i += 1) {
-    digits += (seed[i] % 10).toString();
-  }
-
-  while (digits.length < 9) {
-    digits += crypto.randomInt(0, 10).toString();
-  }
-
-  return `${prefix}${digits.slice(0, 9)}BR`;
-}
-
 function buildPaymentData(admin, payment) {
   const amount = Number(payment?.transaction_amount);
   const installments = Number(payment?.installments);
@@ -247,7 +223,6 @@ module.exports = async function handler(req, res) {
   const existingTracking = sanitizeTrackingCode(
     data?.trackingCode || shippingData?.trackingCode || ""
   );
-  let generatedTracking = null;
 
   if (shouldUpdateStatus(currentStatus, nextStatus)) {
     update.status = nextStatus;
@@ -258,20 +233,16 @@ module.exports = async function handler(req, res) {
         update.paidAt = approvedAt;
       }
 
-      if (
-        shippingMethod === "correios" &&
-        !existingTracking &&
-        (!shippingData || !shippingData.trackingGeneratedAt)
-      ) {
-        generatedTracking = generateTrackingCode(orderId);
-        update.trackingCode = generatedTracking;
+      if (shippingMethod === "correios") {
+        const nextShippingStatus = existingTracking
+          ? shippingData?.trackingStatus || shippingData?.status || "label_generated"
+          : "awaiting_label";
         update.shipping = {
           ...shippingData,
           method: shippingData?.method || "correios",
           service: shippingData?.service || "Correios",
-          trackingCode: generatedTracking,
-          trackingGeneratedAt: admin.firestore.FieldValue.serverTimestamp(),
-          trackingGeneratedBy: "automatic",
+          trackingStatus: nextShippingStatus,
+          status: nextShippingStatus,
         };
       }
     }
@@ -283,15 +254,29 @@ module.exports = async function handler(req, res) {
 
   try {
     await orderRef.set(update, { merge: true });
-    if (generatedTracking) {
-      console.log("🚚 Código de rastreio gerado automaticamente", {
-        orderId,
-        trackingCode: generatedTracking,
-      });
-    }
   } catch (err) {
     console.error("❌ Falha ao atualizar pedido com status de pagamento:", err);
     return res.status(500).json({ error: "Erro ao atualizar pedido" });
+  }
+
+  if (nextStatus === "paid" && shippingMethod === "correios" && !existingTracking) {
+    const labelServiceCode =
+      shippingData?.serviceCode || shippingData?.selectedServiceCode || shippingData?.preferredServiceCode || "";
+    try {
+      const labelResult = await createLabelForOrder({
+        orderId,
+        serviceCode: labelServiceCode,
+        auto: true,
+      });
+      if (labelResult?.trackingCode) {
+        console.log("🚚 Etiqueta gerada automaticamente", {
+          orderId,
+          trackingCode: labelResult.trackingCode,
+        });
+      }
+    } catch (err) {
+      console.error("⚠️ Falha ao gerar etiqueta automaticamente:", err);
+    }
   }
 
   console.log("✅ Status de pagamento sincronizado", {
