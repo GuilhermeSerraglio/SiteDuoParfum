@@ -7,6 +7,7 @@
  * - MELHOR_ENVIO_SERVICE_PAC / MELHOR_ENVIO_SERVICE_SEDEX
  * - MELHOR_ENVIO_USER_AGENT (ex.: "SiteDuoParfum/1.0")
  * - Dados do remetente (MELHOR_ENVIO_FROM_* ou MELHOR_ENVIO_SENDER_JSON)
+ * - Credenciais do Firebase Admin (FIREBASE_SERVICE_ACCOUNT ou equivalentes)
  * - Opcional: MELHOR_ENVIO_API_URL para forçar base URL
  */
 const { parseStringPromise } = require("xml2js");

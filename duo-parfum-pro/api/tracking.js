@@ -3,8 +3,10 @@
  *
  * Variáveis obrigatórias:
  * - MELHOR_ENVIO_ENV, MELHOR_ENVIO_CLIENT_ID, MELHOR_ENVIO_CLIENT_SECRET
+ * - MELHOR_ENVIO_SERVICE_PAC, MELHOR_ENVIO_SERVICE_SEDEX
  * - MELHOR_ENVIO_USER_AGENT (opcional, mas recomendado)
- * - Credenciais Firebase Admin para atualizar pedidos automaticamente
+ * - Dados do remetente (MELHOR_ENVIO_FROM_* ou MELHOR_ENVIO_SENDER_JSON)
+ * - Credenciais Firebase Admin (FIREBASE_SERVICE_ACCOUNT ou equivalentes)
  */
 const https = require("https");
 
