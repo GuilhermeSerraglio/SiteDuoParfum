@@ -1,16 +1,27 @@
+/**
+ * Endpoint de cálculo de frete.
+ *
+ * Pré-requisitos de ambiente (Vercel):
+ * - MELHOR_ENVIO_ENV ("sandbox" ou "production")
+ * - MELHOR_ENVIO_CLIENT_ID / MELHOR_ENVIO_CLIENT_SECRET
+ * - MELHOR_ENVIO_SERVICE_PAC / MELHOR_ENVIO_SERVICE_SEDEX
+ * - MELHOR_ENVIO_USER_AGENT (ex.: "SiteDuoParfum/1.0")
+ * - Dados do remetente (MELHOR_ENVIO_FROM_* ou MELHOR_ENVIO_SENDER_JSON)
+ * - Credenciais do Firebase Admin (FIREBASE_SERVICE_ACCOUNT ou equivalentes)
+ * - Opcional: MELHOR_ENVIO_API_URL para forçar base URL
+ */
 const { parseStringPromise } = require("xml2js");
 const { getAccessToken } = require("./melhorenvio-auth");
 
-// Configurações de origem
+// Configuração de origem
 const ORIGIN = {
   city: "Sorriso",
   state: "MT",
   cep: "78890000",
 };
-
 const ORIGIN_LABEL = `${ORIGIN.city} - ${ORIGIN.state}`;
 
-// Serviços dos Correios
+// Serviços Correios
 const CORREIOS_SERVICES = [
   { key: "pac", code: "04510", name: "PAC" },
   { key: "sedex", code: "04014", name: "SEDEX" },
@@ -23,6 +34,7 @@ const MIN_PHYSICAL_WEIGHT_KG = 0.1;
 const MIN_BILLABLE_WEIGHT_KG = 0.3;
 const PACKAGE_BUFFER_WEIGHT_KG = 0.05;
 const ITEM_WEIGHT_KG = 0.045;
+
 const PACKAGE_DIMENSIONS = {
   formato: "1",
   comprimento: 16,
@@ -91,6 +103,9 @@ function formatDeclaredValueBR(value) {
 
 // ---------------- Melhor Envio ----------------
 function resolveApiBase() {
+  const explicit = sanitizeString(process.env.MELHOR_ENVIO_API_URL);
+  if (explicit) return explicit;
+
   const env = sanitizeString(process.env.MELHOR_ENVIO_ENV || "sandbox").toLowerCase();
   return env === "production"
     ? "https://www.melhorenvio.com.br/api/v2"
@@ -103,7 +118,12 @@ function buildMelhorEnvioConfig() {
   };
 }
 async function melhorEnvioRequest(config, path, { method = "GET", body } = {}) {
-  const token = await getAccessToken();
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    throw new Error("Falha ao autenticar no Melhor Envio: " + err.message);
+  }
   const url = `${config.baseUrl}${path}`;
   const headers = {
     Accept: "application/json",
@@ -130,7 +150,7 @@ async function calculateMelhorEnvioShipping({ destinationCep, items, metrics }) 
     from: { postal_code: ORIGIN.cep, country: "BR" },
     to: { postal_code: destinationCep, country: "BR" },
     products: items.map((i, idx) => ({
-      name: sanitizeString(i?.name || `Produto ${idx+1}`),
+      name: sanitizeString(i?.name || `Produto ${idx + 1}`),
       quantity: Math.max(1, toNumber(i?.qty, 1)),
       unitary_value: toNumber(i?.price, 0),
     })),
@@ -183,6 +203,7 @@ async function requestCorreiosQuote(service, destinationCep, billedWeightKg, dec
   const servico = xml?.Servicos?.cServico;
   return {
     method: "correios",
+    provider: "correios",
     name: service.name,
     serviceCode: service.code,
     cost: Number(servico?.Valor?.replace(",", ".")) || null,

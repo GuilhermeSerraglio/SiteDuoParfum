@@ -1,8 +1,18 @@
+/**
+ * Endpoint de rastreio.
+ *
+ * Variáveis obrigatórias:
+ * - MELHOR_ENVIO_ENV, MELHOR_ENVIO_CLIENT_ID, MELHOR_ENVIO_CLIENT_SECRET
+ * - MELHOR_ENVIO_SERVICE_PAC, MELHOR_ENVIO_SERVICE_SEDEX
+ * - MELHOR_ENVIO_USER_AGENT (opcional, mas recomendado)
+ * - Dados do remetente (MELHOR_ENVIO_FROM_* ou MELHOR_ENVIO_SENDER_JSON)
+ * - Credenciais Firebase Admin (FIREBASE_SERVICE_ACCOUNT ou equivalentes)
+ */
 const https = require("https");
 const { getAccessToken } = require("./melhorenvio-auth");
 const { getFirebaseAdmin } = require("./_firebase-admin");
 
-// ==================== Utils ====================
+// ---------------- Utils ----------------
 function sanitizeString(value, fallback = "") {
   if (value === null || value === undefined) return fallback;
   return String(value).trim();
@@ -27,7 +37,7 @@ function sanitizeOrderStatus(status = "") {
   return "pending";
 }
 
-// ==================== Correios tracking ====================
+// ---------------- Correios tracking ----------------
 function fetchCorreiosTracking(code) {
   const url = `https://proxyapp.correios.com.br/v1/sro-rastro/${encodeURIComponent(code)}`;
   return new Promise((resolve, reject) => {
@@ -105,7 +115,7 @@ function normalizeCorreiosData(code, payload = {}) {
   return { code: sanitizeCode(objeto.codObjeto || code), events, raw: objeto, provider: "correios" };
 }
 
-// ==================== Melhor Envio tracking ====================
+// ---------------- Melhor Envio tracking ----------------
 function resolveApiBase() {
   const explicit = sanitizeString(process.env.MELHOR_ENVIO_API_URL);
   if (explicit) return explicit;
@@ -139,7 +149,7 @@ function normalizeMelhorEnvioData(code, payload = {}) {
   return { code: sanitizeCode(code), events, raw: payload, provider: "melhorenvio" };
 }
 
-// ==================== Firestore sync ====================
+// ---------------- Firestore sync ----------------
 async function updateTrackingInFirestore({ code, normalized, orderId }) {
   let admin;
   try {
@@ -183,7 +193,7 @@ async function updateTrackingInFirestore({ code, normalized, orderId }) {
   await docRef.set(updatePayload, { merge: true });
 }
 
-// ==================== Handler ====================
+// ---------------- Handler ----------------
 module.exports = async function handler(req, res) {
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
@@ -204,6 +214,7 @@ module.exports = async function handler(req, res) {
       const raw = await fetchCorreiosTracking(code);
       result = normalizeCorreiosData(code, raw);
     }
+
     updateTrackingInFirestore({ code, normalized: result, orderId }).catch(console.error);
 
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
