@@ -123,7 +123,18 @@
         pending: { key: "pending", label: "Pendente", className: "is-pending" },
         paid: { key: "paid", label: "Pago", className: "is-paid" },
         sent: { key: "sent", label: "Enviado", className: "is-sent" },
+        delivered: { key: "delivered", label: "Entregue", className: "is-delivered" },
         canceled: { key: "canceled", label: "Cancelado", className: "is-canceled" }
+      };
+
+      const SHIPPING_STATUS_INFO = {
+        awaiting_label: { key: "awaiting_label", label: "Aguardando etiqueta", description: "Etiqueta ainda não foi emitida." },
+        label_generated: { key: "label_generated", label: "Etiqueta gerada", description: "Etiqueta emitida — aguarde a postagem." },
+        in_transit: { key: "in_transit", label: "Em trânsito", description: "Objeto postado e em deslocamento." },
+        out_for_delivery: { key: "out_for_delivery", label: "Saiu para entrega", description: "Objeto saiu para entrega ao destinatário." },
+        delivered: { key: "delivered", label: "Entregue", description: "Objeto entregue ao destinatário." },
+        awaiting_pickup: { key: "awaiting_pickup", label: "Aguardando retirada", description: "Objeto disponível na agência dos Correios." },
+        pickup: { key: "pickup", label: "Retirada no estúdio", description: "Pedido disponível para retirada conforme combinado." }
       };
 
       const productsCache = new Map();
@@ -144,6 +155,11 @@
 
       const sanitizeTrackingCode = (code = "") =>
         code.toString().toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+      const getShippingStatusInfo = (status = "") => {
+        const normalized = status.toString().toLowerCase();
+        return SHIPPING_STATUS_INFO[normalized] || null;
+      };
 
       function getOrderStatusInfo(status) {
         const normalized = (status || "pending").toString().toLowerCase();
@@ -479,6 +495,7 @@ auth.onAuthStateChanged(user => {
           const shippingCost = Number(shipping.cost);
           const shippingService = (shipping.service || "Correios").toString().trim();
           const shippingEstimate = shipping.deliveryEstimate || "";
+          const shippingStatusInfo = getShippingStatusInfo(shipping?.trackingStatus || shipping?.status);
           const shippingParts = [];
           if (shippingMethod === "pickup") {
             shippingParts.push("Retirada no local");
@@ -503,6 +520,9 @@ auth.onAuthStateChanged(user => {
             if (shipping.originLabel) {
               shippingParts.push(`Postagem: ${escapeHtml(shipping.originLabel)}`);
             }
+          }
+          if (shippingStatusInfo) {
+            shippingParts.push(escapeHtml(shippingStatusInfo.label));
           }
           const shippingSummary = shippingParts.join(" • ");
 ...
@@ -531,20 +551,40 @@ auth.onAuthStateChanged(user => {
             ? `<span class="order-card__meta-line muted">${escapeHtml(shipping?.trackingGeneratedBy === "automatic" ? "Gerado automaticamente" : "Atualizado")} em ${escapeHtml(trackingGeneratedAt.toLocaleString("pt-BR"))}</span>`
             : "";
 
+          const trackingButtons = [
+            `<button class="btn small ghost" onclick="saveTracking('${doc.id}')">Salvar</button>`
+          ];
+          if (trackingCode) {
+            trackingButtons.push(`<a class="btn small ghost" href="https://rastreamento.correios.com.br/app/index.php?codigo=${trackingCode}" target="_blank" rel="noreferrer">Ver no Correios</a>`);
+          }
+          if (shippingMethod === "correios") {
+            trackingButtons.push(`<button class="btn small ghost" onclick="generateLabel('${doc.id}')">Gerar etiqueta</button>`);
+            if (shipping.labelUrl) {
+              trackingButtons.push(`<a class="btn small ghost" href="${escapeHtml(shipping.labelUrl)}" target="_blank" rel="noreferrer">Baixar etiqueta</a>`);
+            }
+          }
+          const trackingStatusLine = shippingStatusInfo
+            ? `<p class="order-card__meta-line"><strong>Status logística:</strong> ${escapeHtml(shippingStatusInfo.label)} — ${escapeHtml(shippingStatusInfo.description)}</p>`
+            : "";
+          const labelNote = shipping.labelUrl
+            ? `<span class="order-card__meta-line"><a href="${escapeHtml(shipping.labelUrl)}" target="_blank" rel="noreferrer">Etiqueta disponível</a></span>`
+            : "";
           const trackingHtml = `
             <div class="order-card__tracking-admin">
               <span class="order-card__label">Rastreio Correios</span>
+              ${trackingStatusLine}
               <div class="order-card__tracking-actions">
                 <input class="input order-card__tracking-input" data-tracking-input="${doc.id}" placeholder="Ex: LB123456789BR" value="${escapeHtml(trackingCode)}">
-                <button class="btn small ghost" onclick="saveTracking('${doc.id}')">Salvar</button>
-                ${trackingCode ? `<a class="btn small ghost" href="https://rastreamento.correios.com.br/app/index.php?codigo=${trackingCode}" target="_blank" rel="noreferrer">Ver no Correios</a>` : ""}
+                ${trackingButtons.join("")}
               </div>
               ${trackingGeneratedNote}
+              ${labelNote}
             </div>`;
 
           const statusButtons = [
             { value: "paid", label: "Pago" },
             { value: "sent", label: "Enviado" },
+            { value: "delivered", label: "Entregue" },
             { value: "canceled", label: "Cancelado" }
           ];
 
@@ -637,6 +677,42 @@ auth.onAuthStateChanged(user => {
         } catch (err) {
           console.error("Erro ao salvar código de rastreio:", err);
           alert("Não foi possível atualizar o código de rastreio.");
+        }
+      };
+
+      window.generateLabel = async (id) => {
+        if (!id) {
+          alert("Pedido não identificado.");
+          return;
+        }
+
+        try {
+          const response = await fetch("/api/create-label", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ orderId: id, force: true })
+          });
+
+          const text = await response.text();
+          let data = {};
+          if (text) {
+            try {
+              data = JSON.parse(text);
+            } catch (err) {
+              console.warn("Resposta de create-label não é JSON válido:", err);
+            }
+          }
+
+          if (!response.ok || data?.error) {
+            const message = data?.error || `HTTP ${response.status}`;
+            throw new Error(message);
+          }
+
+          alert(data.generated ? "Etiqueta gerada com sucesso." : "Etiqueta já estava disponível para este pedido.");
+          loadOrders();
+        } catch (err) {
+          console.error("Erro ao gerar etiqueta:", err);
+          alert("Não foi possível gerar a etiqueta automaticamente.");
         }
       };
 

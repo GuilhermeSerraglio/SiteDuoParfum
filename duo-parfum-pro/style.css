@@ -825,6 +825,11 @@ button:disabled {
   background: linear-gradient(140deg, rgba(66, 174, 118, 0.16), rgba(233, 247, 242, 0.85));
 }
 
+.order-card.is-delivered {
+  border-left-color: #2e7a53;
+  background: linear-gradient(140deg, rgba(46, 122, 83, 0.18), rgba(226, 245, 236, 0.9));
+}
+
 .order-card.is-canceled {
   border-left-color: #d64545;
   background: linear-gradient(140deg, rgba(214, 69, 69, 0.14), rgba(253, 236, 234, 0.88));
@@ -838,6 +843,11 @@ button:disabled {
 .order-card__status-badge.is-sent {
   background: rgba(72, 175, 132, 0.22);
   color: #2e7a53;
+}
+
+.order-card__status-badge.is-delivered {
+  background: rgba(46, 122, 83, 0.22);
+  color: #1f6241;
 }
 
 .order-card__status-badge.is-canceled {
@@ -1136,6 +1146,94 @@ button:disabled {
 .shipping-summary {
   font-size: 0.85rem;
   color: var(--brand-muted);
+}
+
+.shipping-service-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shipping-service-option {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(140, 91, 77, 0.25);
+  background: #fff;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.shipping-service-option input[type="radio"] {
+  margin-top: 2px;
+  accent-color: var(--brand-dark);
+}
+
+.shipping-service-option__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shipping-service-option__title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--brand-text);
+}
+
+.shipping-service-option__price {
+  font-size: 0.82rem;
+  color: var(--brand-dark);
+}
+
+.shipping-service-option__details {
+  font-size: 0.72rem;
+  color: var(--brand-muted);
+}
+
+.shipping-service-option__error {
+  color: #c0392b;
+}
+
+.shipping-service-option.is-selected {
+  border-color: var(--brand-medium);
+  box-shadow: var(--shadow-soft);
+}
+
+.shipping-service-option.is-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.shipping-service-option.is-disabled input[type="radio"] {
+  cursor: not-allowed;
+}
+
+.shipping-service-origin {
+  margin-top: 6px;
+  font-size: 0.75rem;
+}
+
+.shipping-service-warning {
+  margin-top: 6px;
+  font-size: 0.75rem;
+}
+
+.order-tracking__status-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.order-tracking__status-info strong {
+  font-size: 0.9rem;
+  color: var(--brand-text);
+}
+
+.order-tracking__status-info .muted {
+  font-size: 0.78rem;
 }
 
 .checkout-totals {
