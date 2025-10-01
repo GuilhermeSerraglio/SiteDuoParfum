@@ -19,7 +19,6 @@ function getFetch() {
   if (typeof fetch === "function") {
     return fetch.bind(globalThis);
   }
-  // eslint-disable-next-line global-require
   const fetchModule = require("node-fetch");
   return (fetchModule && fetchModule.default) || fetchModule;
 }
@@ -66,9 +65,9 @@ function resolveApiBase() {
 function loadSenderConfig() {
   const rawJson = sanitizeString(
     process.env.MELHOR_ENVIO_SENDER_JSON ||
-      process.env.MELHOR_ENVIO_FROM_JSON ||
-      process.env.MELHOR_ENVIO_SENDER ||
-      ""
+    process.env.MELHOR_ENVIO_FROM_JSON ||
+    process.env.MELHOR_ENVIO_SENDER ||
+    ""
   );
   if (rawJson) {
     try {
@@ -114,7 +113,6 @@ async function melhorEnvioRequest(config, path, { method = "GET", body } = {}) {
     console.error("Falha ao autenticar no Melhor Envio:", authError);
     const error = new Error("Falha ao autenticar no Melhor Envio");
     error.status = 500;
-    error.cause = authError;
     throw error;
   }
 
@@ -131,12 +129,7 @@ async function melhorEnvioRequest(config, path, { method = "GET", body } = {}) {
     payload = JSON.stringify(body);
   }
 
-  const response = await fetchFn(url, {
-    method,
-    headers,
-    body: payload,
-  });
-
+  const response = await fetchFn(url, { method, headers, body: payload });
   const text = await response.text();
   let data = null;
   if (text) {
@@ -164,18 +157,10 @@ function resolveServiceId(serviceCode) {
   const envDirect = sanitizeString(process.env[`MELHOR_ENVIO_SERVICE_${normalized}`]);
   if (envDirect) return envDirect;
   if (normalized === "04014") {
-    return (
-      sanitizeString(process.env.MELHOR_ENVIO_SERVICE_SEDEX) ||
-      sanitizeString(process.env.MELHOR_ENVIO_SERVICE_SEDEX_ID) ||
-      null
-    );
+    return sanitizeString(process.env.MELHOR_ENVIO_SERVICE_SEDEX) || null;
   }
   if (normalized === "04510") {
-    return (
-      sanitizeString(process.env.MELHOR_ENVIO_SERVICE_PAC) ||
-      sanitizeString(process.env.MELHOR_ENVIO_SERVICE_PAC_ID) ||
-      null
-    );
+    return sanitizeString(process.env.MELHOR_ENVIO_SERVICE_PAC) || null;
   }
   return null;
 }
@@ -207,10 +192,6 @@ function extractTrackingCode(info = {}) {
       return sanitizeString(info.tracking.code || info.tracking.number || "");
     }
   }
-  if (Array.isArray(info.tags)) {
-    const trackingTag = info.tags.find((tag) => /[A-Z]{2}\d{9}[A-Z]{2}/i.test(tag));
-    if (trackingTag) return sanitizeString(trackingTag);
-  }
   return sanitizeString(info.tracking_code || info.code || info.id || "");
 }
 
@@ -236,7 +217,7 @@ function sanitizeOrderStatus(status = "") {
   return "pending";
 }
 
-async function createLabelForOrder({ orderId, serviceCode, force = false, auto = false }) {
+async function createLabelForOrder({ orderId, serviceCode, force = false }) {
   if (!orderId) {
     const error = new Error("Pedido não informado para geração da etiqueta");
     error.status = 400;
@@ -255,51 +236,23 @@ async function createLabelForOrder({ orderId, serviceCode, force = false, auto =
 
   const data = snapshot.data() || {};
   const shippingData = typeof data.shipping === "object" && data.shipping ? { ...data.shipping } : {};
-  const shippingMethod = sanitizeString(shippingData.method || data?.customer?.shippingMethod || "correios").toLowerCase();
 
-  if (shippingMethod !== "correios") {
-    const error = new Error("A geração de etiqueta está disponível apenas para envios pelos Correios");
-    error.status = 400;
-    throw error;
-  }
-
-  const existingTracking = sanitizeString(data.trackingCode || shippingData.trackingCode || "");
-  const existingLabelUrl = sanitizeString(shippingData.labelUrl || "");
-  if (existingTracking && existingLabelUrl && !force) {
-    return {
-      orderId,
-      generated: false,
-      skipped: true,
-      reason: "label_already_exists",
-      trackingCode: existingTracking,
-      labelUrl: existingLabelUrl,
-    };
-  }
-
-  const selectedServiceCode = sanitizeString(
-    serviceCode || shippingData.serviceCode || shippingData.selectedServiceCode || shippingData.preferredServiceCode || ""
-  );
+  const selectedServiceCode = sanitizeString(serviceCode || shippingData.serviceCode || "");
   const melhorEnvioServiceId = resolveServiceId(selectedServiceCode);
   if (!melhorEnvioServiceId) {
-    const error = new Error(
-      `Serviço do Melhor Envio não configurado para o código dos Correios ${selectedServiceCode || "(desconhecido)"}.`
-    );
+    const error = new Error(`Serviço do Melhor Envio não configurado para o código ${selectedServiceCode || "(desconhecido)"}.`);
     error.status = 400;
     throw error;
   }
 
   const config = buildMelhorEnvioConfig();
   const sender = config.sender || {};
-
-  const shippingPackage = shippingData.package || {};
-  const volume = buildVolumeFromPackage(shippingPackage);
+  const volume = buildVolumeFromPackage(shippingData.package || {});
   const products = buildProducts(data.items || []);
-  const subtotal = sanitizeNumber(data.subtotal, 0);
-  const insuranceValue = shippingPackage.declaredValue || subtotal || sanitizeNumber(data.total, 0);
-
   const destinationCep = sanitizeCep(shippingData.cep || data.customer?.cep || "");
+
   if (!destinationCep) {
-    const error = new Error("CEP de destino não informado para o pedido");
+    const error = new Error("CEP de destino não informado");
     error.status = 400;
     throw error;
   }
@@ -307,44 +260,18 @@ async function createLabelForOrder({ orderId, serviceCode, force = false, auto =
   const shipmentPayload = {
     service: melhorEnvioServiceId,
     agency: config.agency || undefined,
-    from: {
-      name: sender.name || "Duo Parfum",
-      phone: sender.phone || "",
-      email: sender.email || data.customer?.email || "",
-      document: sender.document || "",
-      postal_code: sanitizeCep(sender.postal_code || ORIGIN.cep),
-      address: sender.address || "",
-      number: sender.number || "",
-      complement: sender.complement || "",
-      district: sender.district || "",
-      city: sender.city || ORIGIN.city,
-      state_abbr: sender.state_abbr || ORIGIN.state,
-      country: sender.country || ORIGIN.country || "BR",
-    },
+    from: sender,
     to: {
-      name: sanitizeString(data.customer?.name || shippingData.recipient || "Cliente Duo Parfum"),
-      phone: sanitizeString(data.customer?.phone || ""),
-      email: sanitizeString(data.customer?.email || ""),
-      document: sanitizeString(data.customer?.document || ""),
+      name: sanitizeString(data.customer?.name || "Cliente Duo Parfum"),
       postal_code: destinationCep,
-      address: sanitizeString(data.customer?.address || shippingData.address || ""),
-      number: sanitizeString(data.customer?.number || shippingData.number || ""),
-      complement: sanitizeString(data.customer?.complement || shippingData.complement || ""),
-      district: sanitizeString(data.customer?.district || ""),
       city: sanitizeString(data.customer?.city || ORIGIN.city),
       state_abbr: sanitizeString(data.customer?.state || ORIGIN.state),
       country: "BR",
     },
     products,
     volumes: [volume],
-    options: {
-      receipt: false,
-      own_hand: false,
-      reverse: false,
-      non_commercial: true,
-      collect: false,
-    },
-    insurance_value: Number(Math.max(0, insuranceValue).toFixed(2)),
+    options: { receipt: false, own_hand: false, reverse: false, non_commercial: true, collect: false },
+    insurance_value: Number(Math.max(0, data.total || 0).toFixed(2)),
   };
 
   const cartResult = await melhorEnvioRequest(config, "/me/cart", {
@@ -352,8 +279,7 @@ async function createLabelForOrder({ orderId, serviceCode, force = false, auto =
     body: [shipmentPayload],
   });
 
-  const cartArray = Array.isArray(cartResult) ? cartResult : cartResult?.data || [];
-  const orderIds = cartArray
+  const orderIds = (Array.isArray(cartResult) ? cartResult : cartResult?.data || [])
     .map((item) => sanitizeString(item?.id))
     .filter((id) => id);
 
@@ -363,71 +289,23 @@ async function createLabelForOrder({ orderId, serviceCode, force = false, auto =
     throw error;
   }
 
-  await melhorEnvioRequest(config, "/me/shipment/checkout", {
-    method: "POST",
-    body: {
-      orders: orderIds,
-      wallet: false,
-    },
-  });
+  await melhorEnvioRequest(config, "/me/shipment/checkout", { method: "POST", body: { orders: orderIds, wallet: false } });
+  await melhorEnvioRequest(config, "/me/shipment/generate", { method: "POST", body: { orders: orderIds } });
 
-  await melhorEnvioRequest(config, "/me/shipment/generate", {
-    method: "POST",
-    body: { orders: orderIds },
-  });
-
-  const orderInfo = await melhorEnvioRequest(config, `/me/orders/${orderIds[0]}`, {
-    method: "GET",
-  });
+  const orderInfo = await melhorEnvioRequest(config, `/me/orders/${orderIds[0]}`, { method: "GET" });
 
   const trackingCode = extractTrackingCode(orderInfo);
   const labelUrl = extractLabelUrl(orderInfo);
-  const labelId = sanitizeString(orderInfo?.id || orderIds[0]);
 
-  if (!trackingCode) {
-    console.warn("Etiqueta gerada mas código de rastreio não retornado", {
-      orderId,
-      orderIds,
-      response: orderInfo,
-    });
-  }
-
-  const shippingStatus = trackingCode ? "label_generated" : shippingData.trackingStatus || "awaiting_label";
-  const updatePayload = {
-    trackingCode,
-    shipping: {
-      ...shippingData,
+  await orderRef.set(
+    {
       trackingCode,
-      labelUrl,
-      labelId,
-      trackingGeneratedAt: admin.firestore.FieldValue.serverTimestamp(),
-      trackingGeneratedBy: auto ? "automatic" : "manual",
-      trackingStatus: shippingStatus,
-      status: shippingStatus,
+      shipping: { ...shippingData, trackingCode, labelUrl },
     },
-  };
+    { merge: true }
+  );
 
-  if (!trackingCode) {
-    updatePayload.shipping.trackingStatus = shippingStatus;
-  }
-
-  const currentStatus = sanitizeOrderStatus(data.status);
-  if (shippingStatus === "delivered") {
-    updatePayload.status = "delivered";
-  } else if (["pending", "paid", "sent"].includes(currentStatus)) {
-    updatePayload.status = "sent";
-  }
-
-  await orderRef.set(updatePayload, { merge: true });
-
-  return {
-    orderId,
-    generated: true,
-    trackingCode,
-    labelUrl,
-    labelId,
-    shippingStatus,
-  };
+  return { orderId, generated: true, trackingCode, labelUrl };
 }
 
 async function handler(req, res) {
